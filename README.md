@@ -8,7 +8,7 @@ The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in
 
 The pipeline is script first: plain Python does everything a rule can decide, and Claude only gets the few steps that need judgment ([ADR 0001](docs/adr/0001-script-first-ai-only-for-judgment.md)). The AI runs headless through `claude -p` on a Claude Pro subscription, so there are no API costs, but every call uses quota that is shared with interactive work. That limit shapes the whole design.
 
-**Status:** Phases 1–2 (collection and rule-based Eligibility) are built. The AI steps are planned for Phases 3–9 and marked as such below.
+**Status:** Phases 1–3 are built: collection, rule-based Eligibility, and Fit scoring with Digest and toast. The other AI steps are planned for Phases 4–9 and marked as such below.
 
 ```mermaid
 flowchart LR
@@ -24,19 +24,21 @@ flowchart LR
         HS[Page hash:<br/>changed pages only]:::planned
     end
     subgraph AI["claude -p, batched, capped per run"]
-        SC[Fit score<br/>+ same Job?<br/>+ Generic job flag]:::planned
+        SC[Fit score]
+        MJ[Same Job?<br/>Generic job flag]:::planned
         EX[Extract Postings<br/>from page text]:::planned
     end
     subgraph Output
         DB[(SQLite)]
-        DG[Digest + toast]:::planned
+        DG[Digest + toast]
         DA[Dashboard<br/>status + Feedback note]:::planned
     end
     BA --> DD
     IM --> DD
     CP --> HS --> EX --> DD
     DD --> EL --> DB
-    EL -- eligible / unclear --> CS --> SC --> DB
+    EL -- eligible / remote candidate --> SC --> DB
+    EL --> CS --> MJ --> DB
     DB --> DG
     DB --> DA
     DA -. Feedback notes .-> SC
@@ -49,7 +51,7 @@ Dashed boxes are planned and not built yet.
 
 | Step | Model | Input | Output | Phase |
 |---|---|---|---|---|
-| Fit score for new eligible Jobs | Sonnet | Profile, recent Feedback notes, rubric, up to `MAX_SCORED_PER_RUN` Jobs in one call | JSON per Job: tier (★★★/★★/★), German reasoning, matching and missing skills, remote and part-time signals | 3 |
+| Fit score for new eligible Jobs (**built**) | Sonnet | Profile, recent Feedback notes, rubric, up to `MAX_SCORED_PER_RUN` Jobs in one call | JSON per Job: tier (★★★/★★/★), German reasoning, matching and missing skills, remote and part-time signals | 3 |
 | Same Job across Sources? | Sonnet | Candidate pairs found by plain rules | Same Job or not, in the same call as scoring | 4 |
 | Generic job flag | Sonnet | The Job being scored | Flag that keeps multi-role and recruiter ads out of matching | 4 |
 | Extract Postings from career pages | Haiku | Visible text of pages whose hash changed | Posting JSON | 8 |
@@ -61,7 +63,7 @@ Dashed boxes are planned and not built yet.
 - **Rules before AI.** Collecting, deduplicating and Eligibility are deterministic. The AI only sees what is left. 
 - **Cheap model for mechanical work.** Haiku extracts, Sonnet judges.
 - **No browsing in the main loop.** Scoring and extraction run without tools. Python fetches and renders pages itself (Playwright for JavaScript pages) and hands over plain text. The only browsing step is the one-time career page setup, and its result is reviewed by hand.
-- **Structured output, checked.** Every call asks for JSON, which is validated. Invalid output gets one retry, and quota or login problems raise a clear error.
+- **Structured output, checked twice.** Every call passes a JSON schema that the CLI enforces, and the code then checks that every Job in the batch was answered exactly once. Invalid output gets one retry, and quota or login problems raise a clear German error.
 - **AI failure never blocks collection.** If scoring fails, the run still counts as collected, the Jobs wait as unscored, and the error is stored with the run.
 - **Uncertainty is shown, not hidden.** Jobs scored from a short mail snippet are marked low confidence. Rule decisions store their reason, so wrong filters can be found.
 - **Human in the loop.** The candidate sets a Job status with an optional Feedback note in the dashboard, and recent notes go into the next scoring prompt.
@@ -87,7 +89,8 @@ python -m venv .venv
 ## Usage
 
 ```
-.venv\Scripts\python -m jobsearch daily    # collect, check Eligibility, fetch descriptions
+.venv\Scripts\python -m jobsearch daily    # collect, check Eligibility, fetch descriptions, score, Digest
+.venv\Scripts\python -m jobsearch score    # score only (--limit N for a cheap test)
 .venv\Scripts\python -m jobsearch status   # counts and the last runs
 .venv\Scripts\python -m pytest             # tests, never touch the network
 ```

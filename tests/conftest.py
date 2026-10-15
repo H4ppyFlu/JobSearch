@@ -38,4 +38,7 @@ def cfg(tmp_path) -> Config:
         radius_target_company_km=70,
         remote_max_window_days=14,
         reopening_days=21,
+        model_scoring="sonnet",
+        max_scored_per_run=40,
+        feedback_notes_in_prompt=20,
     )

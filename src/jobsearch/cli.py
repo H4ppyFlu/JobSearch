@@ -1,4 +1,4 @@
-"""Command line entry point: jobsearch init | status | daily."""
+"""Command line entry point: jobsearch init | status | daily | score."""
 
 from __future__ import annotations
 
@@ -7,12 +7,16 @@ import json
 import logging
 import shutil
 import sys
+from datetime import date
 
 from . import config, db
 from .companies import load_target_companies
 from .config import Config, ConfigError
 from .daily import run_daily
+from .digest import write_digest
 from .eligibility import Rules
+from .notify import notify
+from .scoring import backlog, run_scoring
 from .sources.bundesagentur import BundesagenturClient
 
 
@@ -59,6 +63,9 @@ def cmd_status(cfg: Config) -> None:
            WHERE p.description IS NULL AND j.eligibility != 'ineligible'"""
     ).fetchone()[0]
     print(f"Postings: {total} (ohne Beschreibung, aber in Reichweite: {missing})")
+    tiers = dict(conn.execute("SELECT tier, count(*) FROM fit_scores GROUP BY tier").fetchall())
+    print(f"Fit scores: ★★★ {tiers.get(3, 0)}, ★★ {tiers.get(2, 0)}, ★ {tiers.get(1, 0)}; "
+          f"warten auf Bewertung: {backlog(conn)}")
     print("Letzte Läufe:")
     for row in conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 5"):
         state = {1: "ok", 0: "FEHLER", None: "läuft/abgebrochen"}[row["ok"]]
@@ -67,7 +74,22 @@ def cmd_status(cfg: Config) -> None:
             print(f"      {row['error']}")
 
 
-def cmd_daily(cfg: Config) -> int:
+def cmd_score(cfg: Config, conn, limit: int | None = None) -> int:
+    """Score, write the Digest, show a toast. Returns 1 if the AI step failed."""
+    counts = run_scoring(conn, cfg, limit)
+    path, report = write_digest(conn, cfg.digests_dir, date.today(), counts)
+    print(f"Bewertet: {counts.scored} (davon geringe Sicherheit: {counts.low_confidence}), "
+          f"remote bestätigt/abgelehnt: {counts.remote_confirmed}/{counts.remote_rejected}, "
+          f"warten noch: {counts.backlog}")
+    print(f"Digest: {path}")
+    notify(report, counts, path)
+    if counts.error:
+        print(f"Fehler bei der Bewertung: {counts.error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_daily(cfg: Config, score: bool) -> int:
     cfg.require_home()
     terms = config.read_list_file(cfg.search_terms_path)
     if not terms:
@@ -80,7 +102,10 @@ def cmd_daily(cfg: Config) -> int:
     print(json.dumps({k: v for k, v in counts.__dict__.items() if k != "errors"}, ensure_ascii=False))
     for error in counts.errors:
         print(f"Fehler: {error}", file=sys.stderr)
-    return 1 if counts.errors else 0
+    status = 1 if counts.errors else 0
+    if score:
+        status = max(status, cmd_score(cfg, conn))
+    return status
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -89,7 +114,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="Datenbank und private Dateien anlegen")
     sub.add_parser("status", help="Überblick über Datenbank und letzte Läufe")
-    sub.add_parser("daily", help="Daily run: Postings sammeln und Eligibility prüfen")
+    daily = sub.add_parser("daily", help="Daily run: Postings sammeln, Eligibility prüfen, bewerten")
+    daily.add_argument("--no-score", action="store_true", help="Nur sammeln, nicht bewerten")
+    score = sub.add_parser("score", help="Unbewertete Jobs bewerten, Digest schreiben")
+    score.add_argument("--limit", type=int, help="Höchstens so viele Jobs (statt MAX_SCORED_PER_RUN)")
     args = parser.parse_args(argv)
 
     try:
@@ -100,7 +128,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "status":
             cmd_status(cfg)
         elif args.command == "daily":
-            return cmd_daily(cfg)
+            return cmd_daily(cfg, score=not args.no_score)
+        elif args.command == "score":
+            return cmd_score(cfg, db.connect(cfg.db_path), args.limit)
     except ConfigError as e:
         print(f"Konfiguration: {e}", file=sys.stderr)
         return 2

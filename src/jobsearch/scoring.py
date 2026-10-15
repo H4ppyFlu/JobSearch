@@ -1,0 +1,195 @@
+"""Fit scores: one batched claude -p call rates the newest unscored Jobs against the Profile.
+
+A run scores at most MAX_SCORED_PER_RUN Jobs. The rest wait as unscored for the
+next run. If the AI step fails, nothing is written and the Jobs simply stay
+unscored, so a failure never loses collected data.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import sqlite3
+from dataclasses import dataclass
+from importlib import resources
+
+from . import ai, db
+from .config import Config
+from .eligibility import HOMEOFFICE_REASON
+
+log = logging.getLogger(__name__)
+
+MAX_DESCRIPTION_CHARS = 6000
+AI_NOT_REMOTE_REASON = "Homeoffice möglich, laut KI nicht vollständig remote"
+SYSTEM_PROMPT = "You rate job ads against a candidate profile and answer only with the requested JSON."
+
+# Remote candidates are unclear Jobs whose description had a full-remote phrase (see settle_remote).
+_SCOREABLE = f"""
+    (j.eligibility = 'eligible'
+     OR (j.eligibility = 'unclear' AND j.ineligible_reason LIKE '{HOMEOFFICE_REASON} (Hinweis:%'))
+    AND NOT EXISTS (SELECT 1 FROM fit_scores s WHERE s.job_id = j.id)
+"""
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scores": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "job_id": {"type": "integer"},
+                    "tier": {"type": "integer", "enum": [1, 2, 3]},
+                    "reasoning": {"type": "string"},
+                    "matching_skills": {"type": "array", "items": {"type": "string"}},
+                    "missing_skills": {"type": "array", "items": {"type": "string"}},
+                    "part_time": {"type": "string", "enum": ["yes", "no", "unknown"]},
+                    "remote": {"type": "string", "enum": ["full", "hybrid", "none", "unknown"]},
+                },
+                "required": ["job_id", "tier", "reasoning", "matching_skills", "missing_skills",
+                             "part_time", "remote"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["scores"],
+    "additionalProperties": False,
+}
+
+
+@dataclass
+class ScoreCounts:
+    scored: int = 0
+    low_confidence: int = 0
+    remote_confirmed: int = 0
+    remote_rejected: int = 0
+    backlog: int = 0  # still unscored after this run
+    error: str | None = None
+
+
+def profile_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def backlog(conn: sqlite3.Connection) -> int:
+    return conn.execute(f"SELECT count(*) FROM jobs j WHERE {_SCOREABLE}").fetchone()[0]
+
+
+def pick_jobs(conn: sqlite3.Connection, limit: int) -> list[dict]:
+    """The newest unscored Jobs, each with its longest description."""
+    rows = conn.execute(
+        f"""SELECT j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.eligibility,
+                   (SELECT p.description FROM postings p WHERE p.job_id = j.id AND p.description IS NOT NULL
+                    ORDER BY length(p.description) DESC LIMIT 1) AS description,
+                   NOT EXISTS (SELECT 1 FROM postings p WHERE p.job_id = j.id AND p.is_snippet = 0) AS snippet_only
+            FROM jobs j WHERE {_SCOREABLE}
+            ORDER BY j.first_seen DESC, j.id DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def recent_notes(conn: sqlite3.Connection, limit: int) -> list[dict]:
+    rows = conn.execute(
+        """SELECT j.title, j.company, n.status, n.note FROM feedback_notes n JOIN jobs j ON j.id = n.job_id
+           ORDER BY n.created_at DESC, n.id DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _job_input(job: dict) -> dict:
+    description = job["description"] or ""
+    if len(description) > MAX_DESCRIPTION_CHARS:
+        description = description[:MAX_DESCRIPTION_CHARS] + " […]"
+    item = {
+        "job_id": job["id"],
+        "title": job["title"],
+        "company": job["company"],
+        "location": job["location"],
+        "distance_km": job["distance_km"],
+        "target_company": bool(job["is_target_company"]),
+        "remote_candidate": job["eligibility"] == "unclear",
+        "description": description,
+    }
+    if not description:
+        item["description_missing"] = True
+    return item
+
+
+def build_prompt(profile: str, notes: list[dict], jobs: list[dict]) -> str:
+    rubric = resources.files("jobsearch.prompts").joinpath("scoring.md").read_text(encoding="utf-8")
+    notes_text = "\n".join(f"- {n['title']} ({n['company']}), Status {n['status']}: {n['note']}" for n in notes)
+    return (
+        f"{rubric}\n\n# Profile\n\n{profile.strip()}\n\n"
+        f"# Feedback notes\n\n{notes_text or '(none yet)'}\n\n"
+        f"# Jobs\n\n{json.dumps([_job_input(j) for j in jobs], ensure_ascii=False, indent=1)}\n"
+    )
+
+
+def check_answer(expected_ids: set[int]):
+    def check(data: dict) -> None:
+        ids = [s["job_id"] for s in data.get("scores", [])]
+        if len(ids) != len(set(ids)):
+            raise ai.InvalidAnswer("ein Job wurde mehrfach bewertet")
+        if set(ids) != expected_ids:
+            missing, extra = expected_ids - set(ids), set(ids) - expected_ids
+            raise ai.InvalidAnswer(f"fehlende Jobs {sorted(missing)}, unbekannte Jobs {sorted(extra)}")
+    return check
+
+
+def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash: str, counts: ScoreCounts) -> None:
+    by_id = {j["id"]: j for j in jobs}
+    scored_at = db.now()
+    with conn:
+        for s in answer.data["scores"]:
+            job = by_id[s["job_id"]]
+            low = not job["description"] or bool(job["snippet_only"])
+            conn.execute(
+                """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, part_time_signal,
+                                           remote_signal, low_confidence, profile_hash, model, scored_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (job["id"], s["tier"], s["reasoning"].strip(),
+                 json.dumps(s["matching_skills"], ensure_ascii=False),
+                 json.dumps(s["missing_skills"], ensure_ascii=False),
+                 s["part_time"], s["remote"], int(low), p_hash, answer.model, scored_at),
+            )
+            counts.scored += 1
+            counts.low_confidence += int(low)
+            if s["remote"] != "unknown":
+                conn.execute("UPDATE jobs SET remote_type = ? WHERE id = ?", (s["remote"], job["id"]))
+            if job["eligibility"] == "unclear":
+                if s["remote"] == "full":
+                    conn.execute("UPDATE jobs SET eligibility = 'eligible', ineligible_reason = NULL WHERE id = ?",
+                                 (job["id"],))
+                    counts.remote_confirmed += 1
+                else:
+                    conn.execute("UPDATE jobs SET eligibility = 'ineligible', ineligible_reason = ? WHERE id = ?",
+                                 (AI_NOT_REMOTE_REASON, job["id"]))
+                    counts.remote_rejected += 1
+
+
+def run_scoring(conn: sqlite3.Connection, cfg: Config, limit: int | None = None, ask=ai.ask) -> ScoreCounts:
+    """Score the newest unscored Jobs. AI failures end up in the counts and in runs, never as an exception."""
+    counts = ScoreCounts()
+    jobs = pick_jobs(conn, cfg.max_scored_per_run if limit is None else limit)
+    if not jobs:
+        return counts
+    profile = cfg.read_profile()
+    run_id = db.start_run(conn, "score")
+    try:
+        prompt = build_prompt(profile, recent_notes(conn, cfg.feedback_notes_in_prompt), jobs)
+        log.info("Scoring %d Jobs with %s, prompt %d chars", len(jobs), cfg.model_scoring, len(prompt))
+        answer = ask(prompt, model=cfg.model_scoring, schema=SCHEMA, system=SYSTEM_PROMPT,
+                     check=check_answer({j["id"] for j in jobs}))
+        store(conn, jobs, answer, profile_hash(profile), counts)
+    except ai.AiError as e:
+        log.error("Scoring failed: %s", e)
+        counts.error = str(e)
+    except Exception as e:
+        db.finish_run(conn, run_id, False, json.dumps(counts.__dict__, ensure_ascii=False), repr(e))
+        raise
+    counts.backlog = backlog(conn)
+    db.finish_run(conn, run_id, counts.error is None, json.dumps(counts.__dict__, ensure_ascii=False), counts.error)
+    return counts

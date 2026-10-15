@@ -6,7 +6,8 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 
 - **Phase 1 done** (2026-10-15)
 - **Phase 2 done** (2026-10-15). See "Phase 2 decisions".
-- **Next: Phase 3.** Before starting, check that `claude -p "say ok"` works for the user.
+- **Phase 3 done** (2026-10-15). The live daily run scored 40 Jobs in one call. The user reviewed the first Digest and found the scores and reasoning sound. There was no formal tally against their own ratings yet. See "Phase 3 decisions".
+- **Next: Phase 4.**
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
@@ -30,6 +31,19 @@ Consequence for remote Jobs: there is no server filter for home office, so a nat
 - **Distances are straight-line**, so they come out shorter than road distance.
 - **Untitled offers.** A few Bundesagentur offers have no ad title. The occupation (`hauptberuf`) is used instead.
 - Remote Jobs are only seen while they are inside the nationwide date window, so their `last_seen` is not accurate. Phase 4 has to keep this in mind for Reopenings of remote Jobs.
+
+## Phase 3 decisions (2026-10-15)
+
+- **How `claude -p` is called** (`ai.py`): prompt on stdin, `--json-schema` so the CLI itself enforces the answer shape and returns it in `structured_output`, `--tools ""`, `--strict-mcp-config`, `--disable-slash-commands`, a short `--system-prompt` instead of the coding one, `--no-session-persistence`, and the temp directory as working directory so no project CLAUDE.md is loaded. The model that actually answered is read from `modelUsage` and stored with each score.
+- **`--bare` is not usable.** It would skip even more, but it only accepts an API key and never reads the subscription login.
+- **Two layers of checking.** The schema catches malformed answers. `scoring.py` also checks that every Job in the batch was scored exactly once. Either failure gets one retry, then the run records the error and the Jobs stay unscored. Quota and login errors are recognized from the CLI's message and are not retried.
+- **Remote candidates are settled in the scoring call.** Unclear Jobs with a full-remote phrase are scored like the rest. Only an AI `remote = full` makes them eligible, anything else makes them ineligible with the reason stored. Their score is kept either way.
+- **Low confidence** is set when a Job has no description at all or only snippets. Two Jobs in the first run had no description, because their offers live on partner portals.
+- **Descriptions are cut at 6,000 characters** to keep a 40-Job batch at a predictable size. A full batch took about one minute with Sonnet.
+- **`daily` scores by default** (`--no-score` skips it), and `jobsearch score [--limit N]` scores alone. A small `--limit` is the cheap way to test prompt changes.
+- **The Digest covers the whole day.** It lists every Job scored that day, so a second run rewrites it with everything. ★ Jobs are a plain link list, ★★★ and ★★ get the reasoning and skills.
+- The toast (`win11toast`, non-blocking `notify`) was confirmed live. It also fires when scoring failed, so a quota problem does not go unnoticed.
+- Unclear Jobs with an unknown location are not scored yet. They stay unclear until a later phase decides what to do with them.
 
 ## Changed from the design session
 

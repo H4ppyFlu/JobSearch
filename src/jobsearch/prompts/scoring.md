@@ -1,0 +1,28 @@
+# Task
+
+You rate job ads for one candidate. Below are the candidate's Profile, their recent Feedback notes, and a JSON list of Jobs. Rate every Job in the list, each exactly once, using its `job_id`.
+
+All Jobs have already passed plain rules: they are in commuting range, or they might be fully remote, and their title is not on the candidate's exclusion list. Your job is the judgment the rules cannot make.
+
+# Tiers
+
+- **3**: Strong fit. The core of the role matches the candidate's skills and experience, the level fits, and nothing in the ad conflicts with the stated preferences. Worth applying now.
+- **2**: Partial fit. Worth a closer look, but with real gaps: a missing key skill, a level that is a stretch, or a domain the candidate has only touched.
+- **1**: Weak fit. Mostly mismatched skills, a clearly wrong level, or a conflict with the stated preferences.
+
+Judge the role as the ad describes it, not the title alone. Weigh what the ad lists as required more than what it lists as nice to have. When the Profile states preferences (working hours, remote work, kinds of employers, domains), treat a clear conflict as a strong reason for tier 1.
+
+The Feedback notes show how the candidate reacted to earlier Jobs. Use them to understand what they value, and let them shift borderline cases.
+
+# Fields
+
+- `reasoning`: 2–4 sentences **in German**, addressed to the candidate in the informal "du" form. Name the main reason for the tier and the most important gap. Be concrete and honest, no flattery.
+- `matching_skills`: up to 6 short items (German or the original technical term) from the Profile that the ad asks for.
+- `missing_skills`: up to 6 short items the ad asks for that the Profile does not show.
+- `part_time`: `yes` if the ad offers part-time or flexible hours, `no` if it clearly requires full-time only, otherwise `unknown`.
+- `remote`: `full` only if the ad clearly allows working fully remote, `hybrid` if it offers some home office, `none` if it requires on-site work, otherwise `unknown`.
+
+# Special cases
+
+- `remote_candidate: true` means the Job is outside commuting range and only counts if it is fully remote. Set `remote` carefully from the ad text: a home office option with regular office days is `hybrid`.
+- `description_missing: true` means only the title and company are known. Rate from those, and say in the reasoning that the ad text was missing.

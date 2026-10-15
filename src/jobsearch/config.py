@@ -36,6 +36,9 @@ class Config:
     radius_target_company_km: int
     remote_max_window_days: int
     reopening_days: int
+    model_scoring: str
+    max_scored_per_run: int
+    feedback_notes_in_prompt: int
 
     def require_home(self) -> None:
         """The home location has no default, since it is personal. Fail clearly when it is not set."""
@@ -43,6 +46,14 @@ class Config:
                                             ("HOME_LON", self.home_lon)) if value is None]
         if missing:
             raise ConfigError(f"{', '.join(missing)} fehlt in .env. Trage deinen Wohnort und seine Koordinaten ein.")
+
+    def read_profile(self) -> str:
+        """The Profile text. The file belongs to another project and is only ever read."""
+        if self.profile_path is None:
+            raise ConfigError("PROFILE_PATH fehlt in .env. Ohne Profil kann nichts bewertet werden.")
+        if not self.profile_path.is_file():
+            raise ConfigError(f"Profil nicht gefunden: {self.profile_path}")
+        return self.profile_path.read_text(encoding="utf-8")
 
     @property
     def data_dir(self) -> Path:
@@ -55,6 +66,10 @@ class Config:
     @property
     def db_path(self) -> Path:
         return self.data_dir / "jobsearch.sqlite"
+
+    @property
+    def digests_dir(self) -> Path:
+        return self.data_dir / "digests"
 
     @property
     def companies_path(self) -> Path:
@@ -103,6 +118,9 @@ def load(root: Path | None = None) -> Config:
         radius_target_company_km=_int("RADIUS_TARGET_COMPANY_KM", 70),
         remote_max_window_days=_int("REMOTE_MAX_WINDOW_DAYS", 14),
         reopening_days=_int("REOPENING_DAYS", 21),
+        model_scoring=os.environ.get("MODEL_SCORING", "").strip() or "sonnet",
+        max_scored_per_run=_int("MAX_SCORED_PER_RUN", 40),
+        feedback_notes_in_prompt=_int("FEEDBACK_NOTES_IN_PROMPT", 20),
     )
 
 
