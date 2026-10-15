@@ -1,0 +1,15 @@
+{
+  "ergebnisliste": [
+    {
+      "stellenangebotsTitel": "Entwicklungsingenieur (m/w/d)",
+      "firma": "Example Tech AG",
+      "referenznummer": "10000-0000000003-S",
+      "stellenlokationen": [{"adresse": {"plz": "37073", "ort": "Göttingen"}, "breite": 51.5413, "laenge": 9.9158}],
+      "homeofficemoeglich": false,
+      "entfernung": 40
+    }
+  ],
+  "maxErgebnisse": 3,
+  "page": 2,
+  "size": 2
+}

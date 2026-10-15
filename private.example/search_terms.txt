@@ -1,0 +1,1 @@
+# Manual Search terms, one per line. Lines starting with # are ignored.

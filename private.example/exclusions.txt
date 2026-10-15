@@ -1,0 +1,14 @@
+# Obvious mismatch: a Job whose title contains one of these words (case-insensitive,
+# also inside longer words) is ineligible without any AI call.
+# One pattern per line. Lines starting with # are ignored.
+Praktik
+Werkstudent
+Abschlussarbeit
+Bachelorarbeit
+Masterarbeit
+Thesis
+Ausbildung
+Azubi
+Duales Studium
+Minijob
+Aushilfe
