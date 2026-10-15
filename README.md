@@ -4,6 +4,69 @@ Daily, mostly automated job discovery for one candidate. It collects postings fr
 
 The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in [docs/adr](docs/adr/), and the build order is in [docs/implementation-plan.md](docs/implementation-plan.md).
 
+## How the AI is used
+
+The pipeline is script first: plain Python does everything a rule can decide, and Claude only gets the few steps that need judgment ([ADR 0001](docs/adr/0001-script-first-ai-only-for-judgment.md)). The AI runs headless through `claude -p` on a Claude Pro subscription, so there are no API costs, but every call uses quota that is shared with interactive work. That limit shapes the whole design.
+
+**Status:** Phases 1–2 (collection and rule-based Eligibility) are built. The AI steps are planned for Phases 3–9 and marked as such below.
+
+```mermaid
+flowchart LR
+    subgraph Sources
+        BA[Bundesagentur API]
+        IM[Indeed alert mail<br/>IMAP]:::planned
+        CP[Career pages<br/>requests / Playwright]:::planned
+    end
+    subgraph Rules["Plain Python, no AI"]
+        DD[Dedupe by source ID]
+        EL[Eligibility<br/>radius, exclusions,<br/>full-remote phrases]
+        CS[Candidate search<br/>same company + similar title]:::planned
+        HS[Page hash:<br/>changed pages only]:::planned
+    end
+    subgraph AI["claude -p, batched, capped per run"]
+        SC[Fit score<br/>+ same Job?<br/>+ Generic job flag]:::planned
+        EX[Extract Postings<br/>from page text]:::planned
+    end
+    subgraph Output
+        DB[(SQLite)]
+        DG[Digest + toast]:::planned
+        DA[Dashboard<br/>status + Feedback note]:::planned
+    end
+    BA --> DD
+    IM --> DD
+    CP --> HS --> EX --> DD
+    DD --> EL --> DB
+    EL -- eligible / unclear --> CS --> SC --> DB
+    DB --> DG
+    DB --> DA
+    DA -. Feedback notes .-> SC
+    classDef planned stroke-dasharray: 5 5
+```
+
+Dashed boxes are planned and not built yet.
+
+### Where AI is called
+
+| Step | Model | Input | Output | Phase |
+|---|---|---|---|---|
+| Fit score for new eligible Jobs | Sonnet | Profile, recent Feedback notes, rubric, up to `MAX_SCORED_PER_RUN` Jobs in one call | JSON per Job: tier (★★★/★★/★), German reasoning, matching and missing skills, remote and part-time signals | 3 |
+| Same Job across Sources? | Sonnet | Candidate pairs found by plain rules | Same Job or not, in the same call as scoring | 4 |
+| Generic job flag | Sonnet | The Job being scored | Flag that keeps multi-role and recruiter ads out of matching | 4 |
+| Extract Postings from career pages | Haiku | Visible text of pages whose hash changed | Posting JSON | 8 |
+| Find career pages (one-time setup, with web search) | not fixed yet | Company names | Career URL and ATS type, written back for a human to check | 8 |
+| Derive Search terms | not fixed yet | The Profile, only when its hash changes | 5–8 Search terms | 9 |
+
+### Design principles
+
+- **Rules before AI.** Collecting, deduplicating and Eligibility are deterministic. The AI only sees what is left. 
+- **Cheap model for mechanical work.** Haiku extracts, Sonnet judges.
+- **No browsing in the main loop.** Scoring and extraction run without tools. Python fetches and renders pages itself (Playwright for JavaScript pages) and hands over plain text. The only browsing step is the one-time career page setup, and its result is reviewed by hand.
+- **Structured output, checked.** Every call asks for JSON, which is validated. Invalid output gets one retry, and quota or login problems raise a clear error.
+- **AI failure never blocks collection.** If scoring fails, the run still counts as collected, the Jobs wait as unscored, and the error is stored with the run.
+- **Uncertainty is shown, not hidden.** Jobs scored from a short mail snippet are marked low confidence. Rule decisions store their reason, so wrong filters can be found.
+- **Human in the loop.** The candidate sets a Job status with an optional Feedback note in the dashboard, and recent notes go into the next scoring prompt.
+- **Tests never call the AI.** `ai.py` is the only module that runs `claude -p`, and tests replace it with a fake.
+
 ## Setup
 
 ```
