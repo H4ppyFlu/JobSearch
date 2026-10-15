@@ -8,6 +8,8 @@ from jobsearch import ai, digest, notify
 from jobsearch.eligibility import HOMEOFFICE_REASON
 from jobsearch.scoring import AI_NOT_REMOTE_REASON, run_scoring
 
+from .conftest import FakeAi, add_job
+
 TODAY = date.today().isoformat()
 
 
@@ -16,42 +18,6 @@ def cfg(cfg, tmp_path):
     profile = tmp_path / "profile.md"
     profile.write_text("# Profil\nBeispielkenntnisse: Projektplanung, Datenanalyse.", encoding="utf-8")
     return dataclasses.replace(cfg, profile_path=profile)
-
-
-def add_job(conn, title, eligibility="eligible", reason=None, description="Aufgaben: Projekte planen.",
-            first_seen="2026-10-15", snippet=False):
-    with conn:
-        job_id = conn.execute(
-            """INSERT INTO jobs (company, title, location, distance_km, eligibility, ineligible_reason,
-                                 first_seen, last_seen) VALUES ('Muster GmbH', ?, '34117 Kassel', 5, ?, ?, ?, ?)""",
-            (title, eligibility, reason, first_seen, first_seen),
-        ).lastrowid
-        conn.execute(
-            """INSERT INTO postings (job_id, source, source_id, url, title, company, description, is_snippet,
-                                     first_seen, last_seen)
-               VALUES (?, 'bundesagentur', ?, ?, ?, 'Muster GmbH', ?, ?, ?, ?)""",
-            (job_id, f"ID-{job_id}", f"https://x/{job_id}", title, description, int(snippet), first_seen, first_seen),
-        )
-    return job_id
-
-
-class FakeAi:
-    """Stands in for ai.ask. Rates every Job in the prompt with the given tier and remote signal."""
-
-    def __init__(self, tier=2, remote="unknown", fail=None):
-        self.tier, self.remote, self.fail = tier, remote, fail
-        self.prompts = []
-
-    def __call__(self, prompt, *, model, schema, system, check=None):
-        self.prompts.append(prompt)
-        if self.fail:
-            raise ai.AiError(self.fail)
-        jobs = json.loads(prompt.split("# Jobs\n\n", 1)[1])
-        data = {"scores": [{"job_id": j["job_id"], "tier": self.tier, "reasoning": "Passt gut zu deinem Profil.",
-                            "matching_skills": ["Projektplanung"], "missing_skills": ["SAP"],
-                            "part_time": "unknown", "remote": self.remote} for j in jobs]}
-        check(data)
-        return ai.Answer(data, "claude-test")
 
 
 def test_scores_newest_first_up_to_the_cap(conn, cfg):

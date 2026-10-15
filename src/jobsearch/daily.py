@@ -21,7 +21,7 @@ from . import db
 from .companies import TargetCompany, match_target_company
 from .config import Config
 from .eligibility import HOMEOFFICE_REASON, Rules, decide, distance_km, settle_remote
-from .matching import Placement, attach
+from .matching import JobIndex, MatchRules, Placement, attach
 from .sources import Posting
 from .sources.bundesagentur import BundesagenturClient, SchemaChanged
 
@@ -38,6 +38,8 @@ class Counts:
     descriptions_fetched: int = 0
     description_failures: int = 0
     remote_dropped: int = 0
+    match_pending: int = 0
+    reopenings: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -137,14 +139,18 @@ def run_daily(
         log.info("Daily run: %d Search terms, remote window %d days", len(terms), window)
         found = collect(client, cfg, terms, window, counts)
         counts.postings_seen = len(found)
+        index = JobIndex.load(conn)
+        match_rules = MatchRules(cfg.reopening_days, cfg.radius_target_company_km)
         with conn:
             for posting in found.values():
                 placement = place(posting, cfg, targets)
                 decision = decide(rules, posting.title, placement.distance_km,
                                   placement.is_target_company, posting.homeoffice_possible)
-                _, created = attach(conn, posting, placement, decision, today.isoformat())
-                if created:
+                _, outcome = attach(conn, posting, placement, decision, today.isoformat(), index, match_rules)
+                if outcome:
                     counts.new_jobs += 1
+                    counts.match_pending += outcome == "pending"
+                    counts.reopenings += outcome == "reopening"
                     setattr(counts, decision.eligibility, getattr(counts, decision.eligibility) + 1)
         fetch_missing_descriptions(conn, client, counts)
         settle_remote_jobs(conn, counts)

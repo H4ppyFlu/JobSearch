@@ -8,7 +8,7 @@ The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in
 
 The pipeline is script first: plain Python does everything a rule can decide, and Claude only gets the few steps that need judgment ([ADR 0001](docs/adr/0001-script-first-ai-only-for-judgment.md)). The AI runs headless through `claude -p` on a Claude Pro subscription, so there are no API costs, but every call uses quota that is shared with interactive work. That limit shapes the whole design.
 
-**Status:** Phases 1–3 are built: collection, rule-based Eligibility, and Fit scoring with Digest and toast. The other AI steps are planned for Phases 4–9 and marked as such below.
+**Status:** Phases 1–4 are built: collection, rule-based Eligibility, Fit scoring with Digest and toast, and Job matching with Reopenings. The other AI steps are planned for Phases 5–9 and marked as such below.
 
 ```mermaid
 flowchart LR
@@ -20,12 +20,11 @@ flowchart LR
     subgraph Rules["Plain Python, no AI"]
         DD[Dedupe by source ID]
         EL[Eligibility<br/>radius, exclusions,<br/>full-remote phrases]
-        CS[Candidate search<br/>same company + similar title]:::planned
+        CS[Candidate search<br/>same company + similar title]
         HS[Page hash:<br/>changed pages only]:::planned
     end
     subgraph AI["claude -p, batched, capped per run"]
-        SC[Fit score]
-        MJ[Same Job?<br/>Generic job flag]:::planned
+        SC[Fit score<br/>+ same Job?<br/>+ Generic job flag]
         EX[Extract Postings<br/>from page text]:::planned
     end
     subgraph Output
@@ -37,8 +36,7 @@ flowchart LR
     IM --> DD
     CP --> HS --> EX --> DD
     DD --> EL --> DB
-    EL -- eligible / remote candidate --> SC --> DB
-    EL --> CS --> MJ --> DB
+    EL -- eligible / remote candidate --> CS --> SC --> DB
     DB --> DG
     DB --> DA
     DA -. Feedback notes .-> SC
@@ -52,8 +50,8 @@ Dashed boxes are planned and not built yet.
 | Step | Model | Input | Output | Phase |
 |---|---|---|---|---|
 | Fit score for new eligible Jobs (**built**) | Sonnet | Profile, recent Feedback notes, rubric, up to `MAX_SCORED_PER_RUN` Jobs in one call | JSON per Job: tier (★★★/★★/★), German reasoning, matching and missing skills, remote and part-time signals | 3 |
-| Same Job across Sources? | Sonnet | Candidate pairs found by plain rules | Same Job or not, in the same call as scoring | 4 |
-| Generic job flag | Sonnet | The Job being scored | Flag that keeps multi-role and recruiter ads out of matching | 4 |
+| Same Job across Sources? (**built**) | Sonnet | Candidate pairs found by plain rules | Same Job or not, in the same call as scoring | 4 |
+| Generic job flag (**built**) | Sonnet | The Job being scored | Flag that keeps multi-role and recruiter ads out of matching | 4 |
 | Extract Postings from career pages | Haiku | Visible text of pages whose hash changed | Posting JSON | 8 |
 | Find career pages (one-time setup, with web search) | not fixed yet | Company names | Career URL and ATS type, written back for a human to check | 8 |
 | Derive Search terms | not fixed yet | The Profile, only when its hash changes | 5–8 Search terms | 9 |

@@ -1,5 +1,9 @@
 """Fit scores: one batched claude -p call rates the newest unscored Jobs against the Profile.
 
+The same call answers two more questions per Job: is it a Generic job, and, for a
+Job with a match candidate, is it the same opening as that candidate. Same Jobs
+are merged into the candidate instead of getting a score of their own.
+
 A run scores at most MAX_SCORED_PER_RUN Jobs. The rest wait as unscored for the
 next run. If the AI step fails, nothing is written and the Jobs simply stay
 unscored, so a failure never loses collected data.
@@ -17,10 +21,12 @@ from importlib import resources
 from . import ai, db
 from .config import Config
 from .eligibility import HOMEOFFICE_REASON
+from .matching import merge
 
 log = logging.getLogger(__name__)
 
 MAX_DESCRIPTION_CHARS = 6000
+MAX_CANDIDATE_CHARS = 1500
 AI_NOT_REMOTE_REASON = "Homeoffice möglich, laut KI nicht vollständig remote"
 SYSTEM_PROMPT = "You rate job ads against a candidate profile and answer only with the requested JSON."
 
@@ -46,9 +52,11 @@ SCHEMA = {
                     "missing_skills": {"type": "array", "items": {"type": "string"}},
                     "part_time": {"type": "string", "enum": ["yes", "no", "unknown"]},
                     "remote": {"type": "string", "enum": ["full", "hybrid", "none", "unknown"]},
+                    "generic": {"type": "boolean"},
+                    "same_as_candidate": {"type": "boolean"},
                 },
                 "required": ["job_id", "tier", "reasoning", "matching_skills", "missing_skills",
-                             "part_time", "remote"],
+                             "part_time", "remote", "generic", "same_as_candidate"],
                 "additionalProperties": False,
             },
         }
@@ -64,6 +72,8 @@ class ScoreCounts:
     low_confidence: int = 0
     remote_confirmed: int = 0
     remote_rejected: int = 0
+    merged: int = 0
+    generic: int = 0
     backlog: int = 0  # still unscored after this run
     error: str | None = None
 
@@ -80,6 +90,7 @@ def pick_jobs(conn: sqlite3.Connection, limit: int) -> list[dict]:
     """The newest unscored Jobs, each with its longest description."""
     rows = conn.execute(
         f"""SELECT j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.eligibility,
+                   j.match_candidate,
                    (SELECT p.description FROM postings p WHERE p.job_id = j.id AND p.description IS NOT NULL
                     ORDER BY length(p.description) DESC LIMIT 1) AS description,
                    NOT EXISTS (SELECT 1 FROM postings p WHERE p.job_id = j.id AND p.is_snippet = 0) AS snippet_only
@@ -87,7 +98,25 @@ def pick_jobs(conn: sqlite3.Connection, limit: int) -> list[dict]:
             ORDER BY j.first_seen DESC, j.id DESC LIMIT ?""",
         (limit,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    jobs = [dict(r) for r in rows]
+    for job in jobs:
+        job["candidate"] = _candidate(conn, job["match_candidate"]) if job["match_candidate"] else None
+    return jobs
+
+
+def _candidate(conn: sqlite3.Connection, job_id: int) -> dict | None:
+    row = conn.execute(
+        """SELECT j.title, j.company, j.location, j.first_seen, j.last_seen,
+                  (SELECT p.description FROM postings p WHERE p.job_id = j.id AND p.description IS NOT NULL
+                   ORDER BY length(p.description) DESC LIMIT 1) AS description
+           FROM jobs j WHERE j.id = ? AND j.is_generic = 0""",
+        (job_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    candidate = dict(row)
+    candidate["description"] = (candidate["description"] or "")[:MAX_CANDIDATE_CHARS]
+    return candidate
 
 
 def recent_notes(conn: sqlite3.Connection, limit: int) -> list[dict]:
@@ -115,6 +144,8 @@ def _job_input(job: dict) -> dict:
     }
     if not description:
         item["description_missing"] = True
+    if job["candidate"]:
+        item["candidate"] = job["candidate"]
     return item
 
 
@@ -144,7 +175,21 @@ def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash:
     scored_at = db.now()
     with conn:
         for s in answer.data["scores"]:
+            if s["generic"]:
+                conn.execute("UPDATE jobs SET is_generic = 1 WHERE id = ?", (s["job_id"],))
+                counts.generic += 1
+        # Ascending ids, so a chain of same Jobs within one batch collapses into the oldest.
+        for s in sorted(answer.data["scores"], key=lambda s: s["job_id"]):
             job = by_id[s["job_id"]]
+            if s["same_as_candidate"] and not s["generic"]:
+                target = conn.execute(
+                    """SELECT c.id FROM jobs j JOIN jobs c ON c.id = j.match_candidate
+                       WHERE j.id = ? AND c.is_generic = 0""", (job["id"],)).fetchone()
+                if target:
+                    merge(conn, job["id"], target["id"])
+                    counts.merged += 1
+                    continue
+            conn.execute("UPDATE jobs SET match_candidate = NULL WHERE id = ?", (job["id"],))
             low = not job["description"] or bool(job["snippet_only"])
             conn.execute(
                 """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, part_time_signal,

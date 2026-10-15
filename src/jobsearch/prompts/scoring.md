@@ -26,3 +26,8 @@ The Feedback notes show how the candidate reacted to earlier Jobs. Use them to u
 
 - `remote_candidate: true` means the Job is outside commuting range and only counts if it is fully remote. Set `remote` carefully from the ad text: a home office option with regular office days is `hybrid`.
 - `description_missing: true` means only the title and company are known. Rate from those, and say in the reasoning that the ad text was missing.
+
+# Generic jobs and duplicates
+
+- `generic`: `true` if the ad has no single concrete opening behind it: a multi-role ad, an open application call ("Initiativbewerbung"), a talent pool, or a recruiter or staffing agency ad for an unnamed client. Rate it like any other Job anyway.
+- `same_as_candidate`: some Jobs have a `candidate`, an earlier Job of the same company with a similar title. Set `true` only if both describe the same opening, for example the same ad posted again or on another site, possibly with small wording changes. Set `false` if they are different openings that merely share a title, for example different teams, locations, levels or tasks. Without a `candidate`, always `false`. Still fill in every other field.

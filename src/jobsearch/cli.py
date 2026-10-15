@@ -80,6 +80,7 @@ def cmd_score(cfg: Config, conn, limit: int | None = None) -> int:
     path, report = write_digest(conn, cfg.digests_dir, date.today(), counts)
     print(f"Bewertet: {counts.scored} (davon geringe Sicherheit: {counts.low_confidence}), "
           f"remote bestätigt/abgelehnt: {counts.remote_confirmed}/{counts.remote_rejected}, "
+          f"zusammengeführt: {counts.merged}, Sammelanzeigen: {counts.generic}, "
           f"warten noch: {counts.backlog}")
     print(f"Digest: {path}")
     notify(report, counts, path)

@@ -7,7 +7,8 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 - **Phase 1 done** (2026-10-15)
 - **Phase 2 done** (2026-10-15). See "Phase 2 decisions".
 - **Phase 3 done** (2026-10-15). The live daily run scored 40 Jobs in one call. The user reviewed the first Digest and found the scores and reasoning sound. There was no formal tally against their own ratings yet. See "Phase 3 decisions".
-- **Next: Phase 4.**
+- **Phase 4 done** (2026-10-15). Fixture tests cover the four cases, and a live scoring run decided real candidate pairs correctly. See "Phase 4 decisions".
+- **Next: Phase 5.** Needs the Indeed sample mails from Phase 0.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
@@ -44,6 +45,17 @@ Consequence for remote Jobs: there is no server filter for home office, so a nat
 - **The Digest covers the whole day.** It lists every Job scored that day, so a second run rewrites it with everything. ★ Jobs are a plain link list, ★★★ and ★★ get the reasoning and skills.
 - The toast (`win11toast`, non-blocking `notify`) was confirmed live. It also fires when scoring failed, so a quota problem does not go unnoticed.
 - Unclear Jobs with an unknown location are not scored yet. They stay unclear until a later phase decides what to do with them.
+
+## Phase 4 decisions (2026-10-15)
+
+- **Provisional Job instead of `job_id = null`.** A Posting with a recent candidate becomes a Job right away, with `jobs.match_candidate` pointing at the candidate (migration 002). It needs a Job anyway: Eligibility and placement belong to it, and the scoring call has to rate it. When the AI says "same", `matching.merge` moves its Postings to the candidate and deletes it, before the Digest is written. So no duplicate is ever shown, and nothing waits on anything.
+- **Candidate rule:** same `normalize_company` key and a Jaccard overlap of at least 0.5 between title tokens, with gender markers ((m/w/d), :in, all genders, ...) and filler words removed. On the live data, about 10% of the Jobs in reach got a candidate. Several pairs were clearly different roles at large employers, which is cheap to let the AI decide (about 1,500 characters per candidate in the prompt).
+- **Only Jobs in reach are matched.** Ineligible Postings never look for candidates and are never candidates, since a duplicate nobody sees costs nothing.
+- **Reopening needs a reliable `last_seen`.** It only applies to candidates within `RADIUS_TARGET_COMPANY_KM`, which the daily radius query sees every day. For remote Jobs the AI always decides "same Job?", whatever the age. The trade-off: a real reopening of a remote Job is merged into the old one.
+- **The same ad coming back** (same source ID) after `REOPENING_DAYS` of absence is also a Reopening: its Posting moves to the new Job, the old Job keeps its history.
+- **One call, three answers.** The scoring schema gained `generic` and `same_as_candidate`. A merged Job gets no score of its own. A chain of same Jobs in one batch collapses into the oldest. Generic jobs are never merged and never candidates.
+- **Most Generic jobs are staffing agency ads.** In the live run, 11 of 40 Jobs were flagged generic, 10 of them from staffing agencies, which matches the definition in CONTEXT.md. The Digest marks them as "Sammelanzeige".
+- Jobs collected before Phase 4 got their candidates once through a local script, so the live run had real pairs to decide.
 
 ## Changed from the design session
 

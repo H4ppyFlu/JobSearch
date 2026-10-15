@@ -34,7 +34,7 @@ class DayReport:
 def collect_day(conn: sqlite3.Connection, day: date) -> DayReport:
     report = DayReport(day, backlog=backlog(conn))
     rows = conn.execute(
-        """SELECT j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.remote_type,
+        """SELECT j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.remote_type, j.is_generic,
                   s.tier, s.reasoning, s.matching_skills, s.missing_skills, s.part_time_signal, s.low_confidence,
                   (SELECT p.url FROM postings p WHERE p.job_id = j.id AND p.url IS NOT NULL
                    ORDER BY p.id LIMIT 1) AS url
@@ -69,6 +69,8 @@ def _facts(job: dict) -> str:
         facts.append("Teilzeit möglich")
     if job["is_target_company"]:
         facts.append("Zielunternehmen")
+    if job["is_generic"]:
+        facts.append("Sammelanzeige")
     if job["low_confidence"]:
         facts.append("geringe Sicherheit (keine volle Beschreibung)")
     return " · ".join(facts)
