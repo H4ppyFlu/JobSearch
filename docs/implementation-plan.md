@@ -8,7 +8,7 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 - **Phase 2 done** (2026-10-15). See "Phase 2 decisions".
 - **Phase 3 done** (2026-10-15). The live daily run scored 40 Jobs in one call. The user reviewed the first Digest and found the scores and reasoning sound. There was no formal tally against their own ratings yet. See "Phase 3 decisions".
 - **Phase 4 done** (2026-10-15). Fixture tests cover the four cases, and a live scoring run decided real candidate pairs correctly. See "Phase 4 decisions".
-- **Next: Phase 5.** Needs the Indeed sample mails from Phase 0.
+- **Phase 5 in progress.** Mailbox access and the store-then-move flow are built and checked live. The parser waits for real alert mails. See "Phase 5 decisions".
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
@@ -56,6 +56,14 @@ Consequence for remote Jobs: there is no server filter for home office, so a nat
 - **One call, three answers.** The scoring schema gained `generic` and `same_as_candidate`. A merged Job gets no score of its own. A chain of same Jobs in one batch collapses into the oldest. Generic jobs are never merged and never candidates.
 - **Most Generic jobs are staffing agency ads.** In the live run, 11 of 40 Jobs were flagged generic, 10 of them from staffing agencies, which matches the definition in CONTEXT.md. The Digest marks them as "Sammelanzeige".
 - Jobs collected before Phase 4 got their candidates once through a local script, so the live run had real pairs to decide.
+
+## Phase 5 decisions (2026-10-16, partly built)
+
+- **Built without sample mails:** IMAP settings (`IMAP_*`, optional, so the Daily run skips mail when they are empty), `Mailbox` with login, search by sender, `BODY.PEEK` so mails stay unread, and MOVE with a COPY + delete fallback. In `run_daily`, a mail is moved only after its Postings are committed, and a mail without Postings stays in the inbox and shows up as a warning in the Digest. A mailbox failure is recorded as a collection error and does not stop the run.
+- **`parse_alert` returns nothing yet.** It gets built and tested against real alert mails. Until then every alert mail stays in the inbox, so nothing is lost.
+- **Indeed also sends account mails** (login codes, alert confirmations, profile changes), from the same domain. They are recognized by whole subject phrases and left alone, so they are not reported every day. Single words are not enough, since words like "Account" also appear in job titles.
+- **A new alert only starts after its confirmation mail is clicked.** Worth noting in Phase 0.
+- **Open until the samples arrive:** the parser itself, how the `jk` key is found in the tracking links, and how Indeed's location text is placed. It has no coordinates, so until a postcode table exists (Phase 8) those Postings would end up `unclear` with an unknown location.
 
 ## Changed from the design session
 
@@ -122,7 +130,7 @@ JobSearch/
 ### Phase 0: Prerequisites (by hand)
 
 1. Mailbox: enable IMAP in the settings, create the folder `verarbeitet`, note the password for `.env`.
-2. Indeed: create alerts around the home location with a radius of 30 km and a few remote alerts, all sent to the new address. Let 2–3 mails arrive, since Phase 5 needs real samples.
+2. Indeed: create alerts around the home location with a radius of 30 km and a few remote alerts, all sent to the new address, and click the confirmation mail of each. Let 2–3 mails arrive, since Phase 5 needs real samples.
 3. Check that `claude -p "say ok"` works in a fresh terminal with the Pro login.
 
 ### Phase 1: Skeleton

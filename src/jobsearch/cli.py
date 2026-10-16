@@ -18,6 +18,7 @@ from .eligibility import Rules
 from .notify import notify
 from .scoring import backlog, run_scoring
 from .sources.bundesagentur import BundesagenturClient
+from .sources.indeed_mail import Mailbox
 
 
 def _setup_logging(cfg: Config, verbose: bool) -> None:
@@ -74,10 +75,10 @@ def cmd_status(cfg: Config) -> None:
             print(f"      {row['error']}")
 
 
-def cmd_score(cfg: Config, conn, limit: int | None = None) -> int:
+def cmd_score(cfg: Config, conn, limit: int | None = None, warnings: list[str] = ()) -> int:
     """Score, write the Digest, show a toast. Returns 1 if the AI step failed."""
     counts = run_scoring(conn, cfg, limit)
-    path, report = write_digest(conn, cfg.digests_dir, date.today(), counts)
+    path, report = write_digest(conn, cfg.digests_dir, date.today(), counts, warnings)
     print(f"Bewertet: {counts.scored} (davon geringe Sicherheit: {counts.low_confidence}), "
           f"remote bestätigt/abgelehnt: {counts.remote_confirmed}/{counts.remote_rejected}, "
           f"zusammengeführt: {counts.merged}, Sammelanzeigen: {counts.generic}, "
@@ -99,13 +100,17 @@ def cmd_daily(cfg: Config, score: bool) -> int:
                   tuple(config.read_list_file(cfg.exclusions_path)))
     targets = load_target_companies(cfg.companies_path)
     conn = db.connect(cfg.db_path)
-    counts = run_daily(conn, cfg, BundesagenturClient(), targets, rules, terms)
+    mailbox = Mailbox(cfg.imap_host, cfg.imap_user, cfg.imap_password) if cfg.imap_configured else None
+    counts = run_daily(conn, cfg, BundesagenturClient(), targets, rules, terms, mailbox=mailbox)
     print(json.dumps({k: v for k, v in counts.__dict__.items() if k != "errors"}, ensure_ascii=False))
     for error in counts.errors:
         print(f"Fehler: {error}", file=sys.stderr)
     status = 1 if counts.errors else 0
+    warnings = [f"Fehler beim Sammeln: {e}" for e in counts.errors]
+    if counts.alert_mails_unread:
+        warnings.append(f"{counts.alert_mails_unread} Alert-Mail(s) ohne erkannte Jobs, sie liegen noch im Posteingang.")
     if score:
-        status = max(status, cmd_score(cfg, conn))
+        status = max(status, cmd_score(cfg, conn, warnings=warnings))
     return status
 
 

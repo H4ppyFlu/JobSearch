@@ -1,6 +1,6 @@
 """The Daily run: collect Postings, decide Eligibility, store everything.
 
-Two Bundesagentur queries per Search term:
+Then the Indeed alert mails, if IMAP is configured. Two Bundesagentur queries per Search term:
 - a radius query around home without a date limit. It returns every offer that is
   currently online, so last_seen stays accurate for every Job in reach.
 - a nationwide query limited to recent offers, keeping only those with home office.
@@ -9,6 +9,7 @@ Two Bundesagentur queries per Search term:
 
 from __future__ import annotations
 
+import imaplib
 import json
 import logging
 import sqlite3
@@ -24,6 +25,7 @@ from .eligibility import HOMEOFFICE_REASON, Rules, decide, distance_km, settle_r
 from .matching import JobIndex, MatchRules, Placement, attach
 from .sources import Posting
 from .sources.bundesagentur import BundesagenturClient, SchemaChanged
+from .sources.indeed_mail import Mailbox, MailError, parse_alert
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +42,9 @@ class Counts:
     remote_dropped: int = 0
     match_pending: int = 0
     reopenings: int = 0
+    alert_mails: int = 0
+    alert_mails_processed: int = 0
+    alert_mails_unread: int = 0  # no Postings found, still in the inbox
     errors: list[str] = field(default_factory=list)
 
 
@@ -122,6 +127,43 @@ def settle_remote_jobs(conn: sqlite3.Connection, counts: Counts) -> None:
                 counts.remote_dropped += 1
 
 
+def store_postings(conn: sqlite3.Connection, postings, cfg: Config, targets: list[TargetCompany], rules: Rules,
+                   index: JobIndex, today: date, counts: Counts) -> None:
+    match_rules = MatchRules(cfg.reopening_days, cfg.radius_target_company_km)
+    for posting in postings:
+        placement = place(posting, cfg, targets)
+        decision = decide(rules, posting.title, placement.distance_km,
+                          placement.is_target_company, posting.homeoffice_possible)
+        _, outcome = attach(conn, posting, placement, decision, today.isoformat(), index, match_rules)
+        if outcome:
+            counts.new_jobs += 1
+            counts.match_pending += outcome == "pending"
+            counts.reopenings += outcome == "reopening"
+            setattr(counts, decision.eligibility, getattr(counts, decision.eligibility) + 1)
+
+
+def collect_mail(conn: sqlite3.Connection, mailbox: Mailbox, cfg: Config, targets: list[TargetCompany], rules: Rules,
+                 index: JobIndex, today: date, counts: Counts) -> None:
+    """Store the Postings of each alert mail, then move the mail. Mails without Postings stay put."""
+    try:
+        with mailbox as box:
+            for mail in box.indeed_mails():
+                counts.alert_mails += 1
+                postings = parse_alert(mail.message)
+                if not postings:
+                    log.warning("Alert mail without Postings stays in the inbox: %s", mail.subject)
+                    counts.alert_mails_unread += 1
+                    continue
+                counts.postings_seen += len(postings)
+                with conn:
+                    store_postings(conn, postings, cfg, targets, rules, index, today, counts)
+                box.move(mail.uid, cfg.imap_processed_folder)
+                counts.alert_mails_processed += 1
+    except (MailError, imaplib.IMAP4.error, OSError) as e:
+        log.error("Alert mails failed: %s", e)
+        counts.errors.append(f"Alert-Mails: {e}")
+
+
 def run_daily(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -130,6 +172,7 @@ def run_daily(
     rules: Rules,
     terms: list[str],
     today: date | None = None,
+    mailbox: Mailbox | None = None,
 ) -> Counts:
     today = today or date.today()
     counts = Counts()
@@ -140,18 +183,10 @@ def run_daily(
         found = collect(client, cfg, terms, window, counts)
         counts.postings_seen = len(found)
         index = JobIndex.load(conn)
-        match_rules = MatchRules(cfg.reopening_days, cfg.radius_target_company_km)
         with conn:
-            for posting in found.values():
-                placement = place(posting, cfg, targets)
-                decision = decide(rules, posting.title, placement.distance_km,
-                                  placement.is_target_company, posting.homeoffice_possible)
-                _, outcome = attach(conn, posting, placement, decision, today.isoformat(), index, match_rules)
-                if outcome:
-                    counts.new_jobs += 1
-                    counts.match_pending += outcome == "pending"
-                    counts.reopenings += outcome == "reopening"
-                    setattr(counts, decision.eligibility, getattr(counts, decision.eligibility) + 1)
+            store_postings(conn, found.values(), cfg, targets, rules, index, today, counts)
+        if mailbox is not None:
+            collect_mail(conn, mailbox, cfg, targets, rules, index, today, counts)
         fetch_missing_descriptions(conn, client, counts)
         settle_remote_jobs(conn, counts)
     except Exception as e:

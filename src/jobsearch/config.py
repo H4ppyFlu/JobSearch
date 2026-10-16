@@ -39,6 +39,10 @@ class Config:
     model_scoring: str
     max_scored_per_run: int
     feedback_notes_in_prompt: int
+    imap_host: str = ""
+    imap_user: str = ""
+    imap_password: str = ""
+    imap_processed_folder: str = "verarbeitet"
 
     def require_home(self) -> None:
         """The home location has no default, since it is personal. Fail clearly when it is not set."""
@@ -54,6 +58,11 @@ class Config:
         if not self.profile_path.is_file():
             raise ConfigError(f"Profil nicht gefunden: {self.profile_path}")
         return self.profile_path.read_text(encoding="utf-8")
+
+    @property
+    def imap_configured(self) -> bool:
+        """The alert mail Source is optional: without IMAP settings the Daily run skips it."""
+        return bool(self.imap_host and self.imap_user and self.imap_password)
 
     @property
     def data_dir(self) -> Path:
@@ -121,6 +130,10 @@ def load(root: Path | None = None) -> Config:
         model_scoring=os.environ.get("MODEL_SCORING", "").strip() or "sonnet",
         max_scored_per_run=_int("MAX_SCORED_PER_RUN", 40),
         feedback_notes_in_prompt=_int("FEEDBACK_NOTES_IN_PROMPT", 20),
+        imap_host=os.environ.get("IMAP_HOST", "").strip(),
+        imap_user=os.environ.get("IMAP_USER", "").strip(),
+        imap_password=os.environ.get("IMAP_PASSWORD", "").strip(),
+        imap_processed_folder=os.environ.get("IMAP_PROCESSED_FOLDER", "").strip() or "verarbeitet",
     )
 
 

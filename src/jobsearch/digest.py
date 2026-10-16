@@ -76,12 +76,14 @@ def _facts(job: dict) -> str:
     return " · ".join(facts)
 
 
-def render(report: DayReport, scoring: ScoreCounts | None = None) -> str:
+def render(report: DayReport, scoring: ScoreCounts | None = None, warnings: list[str] = ()) -> str:
     total = sum(len(v) for v in report.jobs.values())
     lines = [f"# Jobs vom {report.day:%d.%m.%Y}", ""]
     lines.append(f"{total} neu bewertete Jobs in Reichweite. Warten auf Bewertung: {report.backlog}.")
     if scoring and scoring.error:
         lines += ["", f"> ⚠️ Die Bewertung ist fehlgeschlagen: {scoring.error}"]
+    for warning in warnings:
+        lines += ["", f"> ⚠️ {warning}"]
     for tier in (3, 2):
         jobs = report.jobs[tier]
         lines += ["", f"## {TIER_TITLES[tier]} ({len(jobs)})"]
@@ -104,9 +106,9 @@ def render(report: DayReport, scoring: ScoreCounts | None = None) -> str:
 
 
 def write_digest(conn: sqlite3.Connection, digests_dir: Path, day: date,
-                 scoring: ScoreCounts | None = None) -> tuple[Path, DayReport]:
+                 scoring: ScoreCounts | None = None, warnings: list[str] = ()) -> tuple[Path, DayReport]:
     report = collect_day(conn, day)
     digests_dir.mkdir(parents=True, exist_ok=True)
     path = digests_dir / f"{day.isoformat()}.md"
-    path.write_text(render(report, scoring), encoding="utf-8")
+    path.write_text(render(report, scoring, warnings), encoding="utf-8")
     return path, report
