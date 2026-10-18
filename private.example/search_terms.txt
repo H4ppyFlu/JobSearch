@@ -1,1 +1,4 @@
 # Manual Search terms, one per line. Lines starting with # are ignored.
+# Terms derived from the Profile are added automatically. A line starting with - switches a term off,
+# for example a derived one you do not want:
+# -Beispielberuf

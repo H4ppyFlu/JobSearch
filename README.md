@@ -8,7 +8,7 @@ The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in
 
 The pipeline is script first: plain Python does everything a rule can decide, and Claude only gets the few steps that need judgment ([ADR 0001](docs/adr/0001-script-first-ai-only-for-judgment.md)). The AI runs headless through `claude -p` on a Claude Pro subscription, so there are no API costs, but every call uses quota that is shared with interactive work. That limit shapes the whole design.
 
-**Status:** Phases 1–8 are built: collection from the Bundesagentur, Indeed alert mails and Target companies' career pages, rule-based Eligibility, Fit scoring with Digest and toast, Job matching with Reopenings, a daily run started at logon, and a local dashboard with Feedback notes. Deriving Search terms from the Profile is planned for Phase 9 and marked as such below.
+**Status:** All phases (1–9) are built: collection from the Bundesagentur, Indeed alert mails and Target companies' career pages, Search terms derived from the Profile, rule-based Eligibility, Fit scoring with Digest and toast, Job matching with Reopenings, a daily run started at logon, and a local dashboard with Feedback notes.
 
 ```mermaid
 flowchart LR
@@ -24,6 +24,7 @@ flowchart LR
         HS[Page hash:<br/>changed pages only]
     end
     subgraph AI["claude -p, batched, capped per run"]
+        ST[Derive Search terms<br/>when the Profile changes]
         SC[Fit score<br/>+ same Job?<br/>+ Generic job flag]
         EX[Extract Postings<br/>from page text]
     end
@@ -32,6 +33,7 @@ flowchart LR
         DG[Digest + toast]
         DA[Dashboard<br/>status + Feedback note]
     end
+    ST --> BA
     BA --> DD
     IM --> DD
     CP --> HS --> EX --> DD
@@ -40,10 +42,7 @@ flowchart LR
     DB --> DG
     DB --> DA
     DA -. Feedback notes .-> SC
-    classDef planned stroke-dasharray: 5 5
 ```
-
-Dashed boxes are planned and not built yet.
 
 ### Where AI is called
 
@@ -54,7 +53,7 @@ Dashed boxes are planned and not built yet.
 | Generic job flag (**built**) | Sonnet | The Job being scored | Flag that keeps multi-role and recruiter ads out of matching | 4 |
 | Extract Postings from career pages (**built**) | Haiku | Visible text of pages whose hash changed, several pages per call | Posting JSON | 8 |
 | Find career pages (one-time setup, with web search, **built**) | Sonnet | Company names, and for a recheck what went wrong with the old URL | Career URL, ATS type and render mode, written back for a human to check | 8 |
-| Derive Search terms | not fixed yet | The Profile, only when its hash changes | 5–8 Search terms | 9 |
+| Derive Search terms (**built**) | Sonnet | The Profile, only when its hash changes | 5–8 Search terms, used together with the manual ones | 9 |
 
 ### Design principles
 
@@ -80,7 +79,7 @@ python -m venv .venv
 - `.env`: home location and radii, and later the profile path and mail credentials
 - `private/companies.csv`: Target companies, with aliases for the names they use in job ads
 - `private/exclusions.txt`: title words that rule a job out (internships, theses, ...)
-- `private/search_terms.txt`: Search terms
+- `private/search_terms.txt`: your own Search terms. Once `PROFILE_PATH` is set, the daily run adds 5–8 terms derived from the Profile, and derives them again whenever the Profile changes. A line `-term` switches a term off, derived or not. `jobsearch status` lists the active ones.
 
 `init` also downloads the GeoNames postal codes for Germany and Switzerland into `data/geo/`, used to place jobs that come with a place name only. They are © GeoNames, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 

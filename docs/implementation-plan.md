@@ -13,7 +13,8 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 - **Phase 7 built** (2026-10-18). Tests go through the Flask test client, including the "Done when": a status with a note set in the dashboard appears in the next scoring prompt. On a copy of the live database every page rendered in well under a second. Waiting for the user's first look in the browser. See "Phase 7 decisions".
 - **Phase 8 built** (2026-10-18). Setup, scan, Personio feed, browser fallback and the two-scans report run live. A repeat scan on the same day sent one page out of more than twenty to the AI. Coverage depends on the setup's URLs: after the setup and one recheck, about three quarters of the Target companies had a URL, and about half of those delivered Postings. Roughly half of the pages needed the browser. The rest needs URLs checked by hand, see "Phase 8 decisions".
 - **Open for the user (Phase 8):** check the URLs in `private/companies.csv`. Replace landing pages and broken links with the page that actually lists the jobs; `jobsearch status` and the Digest warnings name the pages that fail or list nothing. Phase 8 counts as done once most Target companies deliver Postings.
-- **Next: Phase 9** (Search terms derived from the Profile).
+- **Phase 9 done** (2026-10-18). A live daily run derived a full set of terms from the Profile in one call and searched them together with the manual ones; a second run made no call. An edited copy of the Profile (the real file stays untouched) gave a different set in one call, and existing Fit scores stayed as they were. See "Phase 9 decisions".
+- **All phases built.** Still open: the Phase 6 task check and the Phase 8 URL check above.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
@@ -253,6 +254,16 @@ JobSearch/
 - When the Profile hash changes, one `claude -p` call proposes 5–8 Search terms from the Profile. They are stored as `derived` and used together with `private/search_terms.txt`.
 - Shown in `jobsearch status`, so you can see which terms are active.
 - **Done when** editing the Profile file changes the derived terms in the next run, and existing Fit scores are left alone (as decided, no re-scoring).
+
+## Phase 9 decisions (2026-10-18)
+
+- **Only derived terms live in the `search_terms` table**, each with the Profile hash it came from. Manual terms stay in `private/search_terms.txt`, so the file remains the one place to edit by hand.
+- **A changed Profile replaces the whole derived set.** In the live check a small addition to the Profile kept only about a quarter of the terms, so the set can shift noticeably on an edit. Terms found earlier stay recorded on their Postings.
+- **Opt-out with `-term`** in `private/search_terms.txt`, for derived and manual terms alike. It survives a new derivation, since the AI does not see it.
+- **A failed derivation keeps the old terms** and is tried again at the next run. It becomes a warning in the Digest. Without a Profile, the daily run searches the manual terms only; the scoring step already reports the missing Profile.
+- **Plain terms only.** An answer with empty or duplicate terms, more than four words, or parentheses and quotes is asked for again, since each term goes into the Bundesagentur `was` field as it is.
+- **More terms, more Jobs to score.** The first run with derived terms brought a few dozen new Jobs. `MAX_SCORED_PER_RUN` still caps each scoring call, so the extra Jobs are spread over the next runs.
+- No re-scoring when the Profile changes, as decided earlier.
 
 ## Testing approach
 

@@ -11,7 +11,7 @@ import time
 from datetime import date
 from logging.handlers import RotatingFileHandler
 
-from . import config, db, geo, scheduler
+from . import ai, config, db, geo, scheduler
 from .career import run_career_scan, scan_due
 from .companies import load_target_companies
 from .config import Config, ConfigError
@@ -20,6 +20,7 @@ from .digest import write_digest
 from .eligibility import Rules
 from .notify import notify, toast
 from .scoring import backlog, run_scoring
+from .search_terms import active_terms, derived_terms, is_current, refresh_derived, switched_off
 from .sources.bundesagentur import BundesagenturClient
 from .sources.indeed_mail import Mailbox
 
@@ -80,6 +81,22 @@ def cmd_status(cfg: Config) -> None:
     tiers = dict(conn.execute("SELECT tier, count(*) FROM fit_scores GROUP BY tier").fetchall())
     print(f"Fit scores: ★★★ {tiers.get(3, 0)}, ★★ {tiers.get(2, 0)}, ★ {tiers.get(1, 0)}; "
           f"warten auf Bewertung: {backlog(conn)}")
+    derived = derived_terms(conn)
+    # status is a look around, so a missing file is shown as empty instead of stopping it
+    manual = config.read_list_file(cfg.search_terms_path) if cfg.search_terms_path.exists() else []
+    active = active_terms(manual, derived)
+    by_hand = {t.casefold() for t in manual}
+    try:
+        stale = bool(derived) and not is_current(conn, cfg.read_profile())
+    except ConfigError:
+        stale = False
+    print(f"Suchbegriffe ({len(active)} aktiv):")
+    print("  manuell:        " + (", ".join(t for t in active if t.casefold() in by_hand) or "-"))
+    print("  aus dem Profil: " + (", ".join(t for t in active if t.casefold() not in by_hand) or "-")
+          + (" (veraltet: Profil geändert, neue Ableitung beim nächsten Lauf)" if stale else ""))
+    off = switched_off(manual)
+    if off:
+        print("  abgeschaltet:   " + ", ".join(off))
     pages = conn.execute(
         """SELECT count(*) n, sum(fail_count > 0) failing, sum(empty_count > 0) empty FROM career_pages"""
     ).fetchone()
@@ -128,23 +145,48 @@ def career_scan(cfg: Config, conn, rules: Rules, targets) -> list[str]:
     return warnings
 
 
-def cmd_daily(cfg: Config, score: bool, career: str = "auto") -> int:
+def terms_for_run(cfg: Config, conn, ask=ai.ask) -> tuple[list[str], list[str]]:
+    """The Search terms for this run, after deriving new ones if the Profile changed, and warnings."""
+    warnings = []
+    manual = config.read_list_file(cfg.search_terms_path)
+    derived = derived_terms(conn)
+    try:
+        profile = cfg.read_profile()
+    except ConfigError as e:  # collecting works without a Profile, scoring reports it
+        log.info("No Search terms derived: %s", e)
+    else:
+        # A rare call where judgment matters more than quota, so the scoring model is reused.
+        result = refresh_derived(conn, profile, model=cfg.model_scoring, ask=ask) if profile.strip() else None
+        if result:
+            derived = result.terms
+            if result.changed:
+                print("Neue Suchbegriffe aus dem Profil: " + ", ".join(result.terms))
+            if result.error:
+                warnings.append(f"Suchbegriffe aus dem Profil nicht abgeleitet: {result.error}")
+    terms = active_terms(manual, derived)
+    if not terms:
+        raise ConfigError(f"{cfg.search_terms_path} enthält keine Suchbegriffe, und aus dem Profil wurden keine "
+                          f"abgeleitet. {' '.join(warnings)}".strip())
+    return terms, warnings
+
+
+def cmd_daily(cfg: Config, score: bool, career: str = "auto", *, client=None, ask=ai.ask) -> int:
     """career: 'auto' scans career pages when due, 'force' always, 'off' never."""
     cfg.require_home()
-    terms = config.read_list_file(cfg.search_terms_path)
-    if not terms:
-        raise ConfigError(f"{cfg.search_terms_path} enthält keine Suchbegriffe.")
     rules = Rules(cfg.radius_km, cfg.radius_target_company_km,
                   tuple(config.read_list_file(cfg.exclusions_path)))
     targets = load_target_companies(cfg.companies_path)
     conn = db.connect(cfg.db_path)
+    terms, warnings = terms_for_run(cfg, conn, ask)
+    for warning in warnings:
+        print(warning, file=sys.stderr)
     mailbox = Mailbox(cfg.imap_host, cfg.imap_user, cfg.imap_password) if cfg.imap_configured else None
-    counts = run_daily(conn, cfg, BundesagenturClient(), targets, rules, terms, mailbox=mailbox)
+    counts = run_daily(conn, cfg, client or BundesagenturClient(), targets, rules, terms, mailbox=mailbox)
     print(json.dumps({k: v for k, v in counts.__dict__.items() if k != "errors"}, ensure_ascii=False))
     for error in counts.errors:
         print(f"Fehler: {error}", file=sys.stderr)
     status = 1 if counts.errors else 0
-    warnings = [f"Fehler beim Sammeln: {e}" for e in counts.errors]
+    warnings += [f"Fehler beim Sammeln: {e}" for e in counts.errors]
     if counts.places_unknown and not cfg.geo_path.exists():
         warnings.append("Ortsdaten fehlen, Jobs aus Alert-Mails haben keine Entfernung. 'jobsearch init' ausführen.")
     if counts.alert_mails_unread:

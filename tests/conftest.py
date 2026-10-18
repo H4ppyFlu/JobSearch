@@ -86,3 +86,23 @@ class FakeAi:
                            for j in self.jobs_in(prompt)]}
         check(data)
         return ai.Answer(data, "claude-test")
+
+
+TERMS = ["Werkplaner", "Anlagenplaner", "Projektleiter Anlagenbau", "Technischer Planer", "Bauleiter"]
+
+
+class TermsAi:
+    """Stands in for ai.ask and proposes the given Search terms."""
+
+    def __init__(self, *answers, fail=None):
+        self.answers = list(answers) or [TERMS]
+        self.fail = fail
+        self.prompts = []
+
+    def __call__(self, prompt, *, model, schema, system, check=None):
+        self.prompts.append(prompt)
+        if self.fail:
+            raise ai.AiError(self.fail)
+        data = {"terms": self.answers[min(len(self.prompts), len(self.answers)) - 1]}
+        check(data)
+        return ai.Answer(data, "claude-test")
