@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from importlib import resources
 
 from . import ai, db
-from .config import Config
+from .config import Config, ConfigError
 from .eligibility import HOMEOFFICE_REASON
 from .matching import merge
 
@@ -221,15 +221,15 @@ def run_scoring(conn: sqlite3.Connection, cfg: Config, limit: int | None = None,
     jobs = pick_jobs(conn, cfg.max_scored_per_run if limit is None else limit)
     if not jobs:
         return counts
-    profile = cfg.read_profile()
     run_id = db.start_run(conn, "score")
     try:
+        profile = cfg.read_profile()
         prompt = build_prompt(profile, recent_notes(conn, cfg.feedback_notes_in_prompt), jobs)
         log.info("Scoring %d Jobs with %s, prompt %d chars", len(jobs), cfg.model_scoring, len(prompt))
         answer = ask(prompt, model=cfg.model_scoring, schema=SCHEMA, system=SYSTEM_PROMPT,
                      check=check_answer({j["id"] for j in jobs}))
         store(conn, jobs, answer, profile_hash(profile), counts)
-    except ai.AiError as e:
+    except (ai.AiError, ConfigError) as e:
         log.error("Scoring failed: %s", e)
         counts.error = str(e)
     except Exception as e:

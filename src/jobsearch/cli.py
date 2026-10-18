@@ -9,7 +9,7 @@ import shutil
 import sys
 from datetime import date
 
-from . import config, db
+from . import config, db, geo
 from .companies import load_target_companies
 from .config import Config, ConfigError
 from .daily import run_daily
@@ -47,6 +47,12 @@ def cmd_init(cfg: Config) -> None:
         created.append(".env")
     db.connect(cfg.db_path).close()
     print(f"Datenbank bereit: {cfg.db_path}")
+    if not cfg.geo_path.exists():
+        try:
+            n = geo.download(cfg.geo_path)
+            print(f"Ortsdaten geladen: {n} Orte (GeoNames, CC BY 4.0)")
+        except Exception as e:  # init must still work offline
+            print(f"Ortsdaten konnten nicht geladen werden ({e}). Später 'jobsearch init' erneut ausführen.")
     if created:
         print("Angelegt aus den Beispielen, bitte ausfüllen: " + ", ".join(created))
     else:
@@ -107,6 +113,8 @@ def cmd_daily(cfg: Config, score: bool) -> int:
         print(f"Fehler: {error}", file=sys.stderr)
     status = 1 if counts.errors else 0
     warnings = [f"Fehler beim Sammeln: {e}" for e in counts.errors]
+    if counts.places_unknown and not cfg.geo_path.exists():
+        warnings.append("Ortsdaten fehlen, Jobs aus Alert-Mails haben keine Entfernung. 'jobsearch init' ausführen.")
     if counts.alert_mails_unread:
         warnings.append(f"{counts.alert_mails_unread} Alert-Mail(s) ohne erkannte Jobs, sie liegen noch im Posteingang.")
     if score:

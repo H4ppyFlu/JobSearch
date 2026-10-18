@@ -8,7 +8,8 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 - **Phase 2 done** (2026-10-15). See "Phase 2 decisions".
 - **Phase 3 done** (2026-10-15). The live daily run scored 40 Jobs in one call. The user reviewed the first Digest and found the scores and reasoning sound. There was no formal tally against their own ratings yet. See "Phase 3 decisions".
 - **Phase 4 done** (2026-10-15). Fixture tests cover the four cases, and a live scoring run decided real candidate pairs correctly. See "Phase 4 decisions".
-- **Phase 5 in progress.** Mailbox access and the store-then-move flow are built and checked live. The parser waits for real alert mails. See "Phase 5 decisions".
+- **Phase 5 done** (2026-10-18). A live run parsed six real alert mails, stored their Jobs and moved the mails. See "Phase 5 decisions".
+- **Next: Phase 6** (scheduling).
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
@@ -57,13 +58,19 @@ Consequence for remote Jobs: there is no server filter for home office, so a nat
 - **Most Generic jobs are staffing agency ads.** In the live run, 11 of 40 Jobs were flagged generic, 10 of them from staffing agencies, which matches the definition in CONTEXT.md. The Digest marks them as "Sammelanzeige".
 - Jobs collected before Phase 4 got their candidates once through a local script, so the live run had real pairs to decide.
 
-## Phase 5 decisions (2026-10-16, partly built)
+## Phase 5 decisions (2026-10-16 and 2026-10-18)
 
 - **Built without sample mails:** IMAP settings (`IMAP_*`, optional, so the Daily run skips mail when they are empty), `Mailbox` with login, search by sender, `BODY.PEEK` so mails stay unread, and MOVE with a COPY + delete fallback. In `run_daily`, a mail is moved only after its Postings are committed, and a mail without Postings stays in the inbox and shows up as a warning in the Digest. A mailbox failure is recorded as a collection error and does not stop the run.
-- **`parse_alert` returns nothing yet.** It gets built and tested against real alert mails. Until then every alert mail stays in the inbox, so nothing is lost.
+- **The parser reads the plain-text part**, not the HTML. Each job is one block: title, "Company - Place", optional salary and marker lines ("Schnellbewerbung", "Aktiver Arbeitgeber"), snippet, age, tracking link. Header and footer blocks are skipped because their last line is not a job link. The HTML part is layout only.
+- **Two kinds of results.** Organic ones link to `/rc/clk` with the job key `jk`, which becomes the source ID and a neutral `viewjob?jk=` URL. Sponsored ones (`/pagead/clk`) carry no key, so their source ID is a hash of title, company and place: the same ad in a second mail is recognized. Personalized tracking links are not kept for organic results, as the mail asks not to pass them on. In the samples, more than half of the results were sponsored, and many of them were off-topic or outside the alert's radius.
+- **Tests use a synthetic copy** of the real block structure (`tests/fixtures/indeed_alert.eml`). The real mails stay in `data/` and never go into git, since they contain personalized links.
+- **Places are looked up in the GeoNames postcode table**, which moved here from Phase 8: `jobsearch init` downloads DE and CH (CC BY 4.0) into `data/geo/places.tsv`. Postcodes of one place and district are averaged. A short or ambiguous name resolves to the candidate nearest home, which is safe because alerts are limited to a radius around home. Country-only places ("Deutschland", typical for sponsored ads) get no location and stay `unclear`, so they are never scored.
+- **A "Remote" place sets home office**, so such a Job goes through the same full-remote check as a Bundesagentur Job. No remote alert was in the samples yet, so this path is only covered by the synthetic fixture.
+- **The processed folder is resolved by name** before any mail is touched. A server may nest it under the inbox (`INBOX/verarbeitet`), so a folder whose last path part matches is accepted. A missing folder fails the mail step before anything is stored.
+- **A missing Profile no longer aborts the run.** It is recorded like an AI failure, the Digest is still written, and the Jobs stay unscored.
+- **Runtime grows with Search terms.** Every new home office Job outside the radius gets its description fetched for the full-remote check. After a few days without a successful run and with more Search terms, one run fetched several hundred descriptions and took about six minutes. Daily runs stay small, since the window only covers the days since the last successful run.
 - **Indeed also sends account mails** (login codes, alert confirmations, profile changes), from the same domain. They are recognized by whole subject phrases and left alone, so they are not reported every day. Single words are not enough, since words like "Account" also appear in job titles.
 - **A new alert only starts after its confirmation mail is clicked.** Worth noting in Phase 0.
-- **Open until the samples arrive:** the parser itself, how the `jk` key is found in the tracking links, and how Indeed's location text is placed. It has no coordinates, so until a postcode table exists (Phase 8) those Postings would end up `unclear` with an unknown location.
 
 ## Changed from the design session
 
@@ -192,7 +199,7 @@ JobSearch/
 ### Phase 8: Career scan
 
 - **Setup** (`jobsearch career-setup`, one time and then on demand): for each company in `private/companies.csv` without a URL, a `claude -p` call with web search finds the career page and guesses the ATS type. The result is written back to the CSV for you to check. This is the only step where the AI browses.
-- Postcode table: download the GeoNames postal codes for DE and CH (CC BY 4.0) into `data/` during `init`, for the distance of career page locations.
+- Postcode table: already there since Phase 5 (`geo.py`), reuse it for career page locations.
 - **Weekly scan:**
   1. Known ATS feeds (for example Personio XML) are parsed directly, without AI.
   2. Other pages are fetched with `requests`, or Playwright when the render mode says so. Visible text is normalized and hashed.

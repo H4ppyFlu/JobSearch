@@ -22,8 +22,9 @@ from . import db
 from .companies import TargetCompany, match_target_company
 from .config import Config
 from .eligibility import HOMEOFFICE_REASON, Rules, decide, distance_km, settle_remote
+from .geo import Gazetteer
 from .matching import JobIndex, MatchRules, Placement, attach
-from .sources import Posting
+from .sources import Location, Posting
 from .sources.bundesagentur import BundesagenturClient, SchemaChanged
 from .sources.indeed_mail import Mailbox, MailError, parse_alert
 
@@ -45,6 +46,7 @@ class Counts:
     alert_mails: int = 0
     alert_mails_processed: int = 0
     alert_mails_unread: int = 0  # no Postings found, still in the inbox
+    places_unknown: int = 0  # Postings with a place name that could not be located
     errors: list[str] = field(default_factory=list)
 
 
@@ -57,6 +59,20 @@ def remote_window_days(conn: sqlite3.Connection, today: date, max_days: int) -> 
         return max_days
     last = date.fromisoformat(row[0][:10])
     return max(1, min(max_days, (today - last).days + 1))
+
+
+def locate(posting: Posting, gazetteer: Gazetteer | None, counts: Counts) -> None:
+    """Coordinates for locations that have only a place name, such as those from alert mails."""
+    located = []
+    for loc in posting.locations:
+        if loc.lat is None and loc.label and gazetteer:
+            point = gazetteer.locate(loc.label)
+            if point:
+                loc = Location(loc.label, *point)
+        if loc.lat is None and loc.label:
+            counts.places_unknown += 1
+        located.append(loc)
+    posting.locations = located
 
 
 def place(posting: Posting, cfg: Config, targets: list[TargetCompany]) -> Placement:
@@ -145,8 +161,13 @@ def store_postings(conn: sqlite3.Connection, postings, cfg: Config, targets: lis
 def collect_mail(conn: sqlite3.Connection, mailbox: Mailbox, cfg: Config, targets: list[TargetCompany], rules: Rules,
                  index: JobIndex, today: date, counts: Counts) -> None:
     """Store the Postings of each alert mail, then move the mail. Mails without Postings stay put."""
+    gazetteer = Gazetteer.load(cfg.geo_path, (cfg.home_lat, cfg.home_lon))
+    if gazetteer is None:
+        log.warning("No place data at %s, alert mail Postings stay without distance", cfg.geo_path)
     try:
         with mailbox as box:
+            # Before any Posting is stored, so a missing folder never leaves half-processed mails.
+            processed = box.folder(cfg.imap_processed_folder)
             for mail in box.indeed_mails():
                 counts.alert_mails += 1
                 postings = parse_alert(mail.message)
@@ -155,9 +176,11 @@ def collect_mail(conn: sqlite3.Connection, mailbox: Mailbox, cfg: Config, target
                     counts.alert_mails_unread += 1
                     continue
                 counts.postings_seen += len(postings)
+                for posting in postings:
+                    locate(posting, gazetteer, counts)
                 with conn:
                     store_postings(conn, postings, cfg, targets, rules, index, today, counts)
-                box.move(mail.uid, cfg.imap_processed_folder)
+                box.move(mail.uid, processed)
                 counts.alert_mails_processed += 1
     except (MailError, imaplib.IMAP4.error, OSError) as e:
         log.error("Alert mails failed: %s", e)

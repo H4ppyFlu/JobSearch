@@ -78,6 +78,13 @@ def test_remote_candidates_are_settled_by_the_ai(conn, cfg):
     assert rows[hybrid] == ("ineligible", AI_NOT_REMOTE_REASON)
 
 
+def test_missing_profile_is_recorded_like_an_ai_failure(conn, cfg, tmp_path):
+    add_job(conn, "Projektingenieur")
+    counts = run_scoring(conn, dataclasses.replace(cfg, profile_path=tmp_path / "weg.md"), ask=FakeAi())
+    assert "Profil nicht gefunden" in counts.error and counts.backlog == 1
+    assert conn.execute("SELECT ok FROM runs").fetchone()[0] == 0
+
+
 def test_ai_failure_keeps_jobs_unscored_and_is_recorded(conn, cfg):
     add_job(conn, "Projektingenieur")
     counts = run_scoring(conn, cfg, ask=FakeAi(fail="Claude-Kontingent erschöpft"))

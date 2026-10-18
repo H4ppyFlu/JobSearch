@@ -8,13 +8,13 @@ The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in
 
 The pipeline is script first: plain Python does everything a rule can decide, and Claude only gets the few steps that need judgment ([ADR 0001](docs/adr/0001-script-first-ai-only-for-judgment.md)). The AI runs headless through `claude -p` on a Claude Pro subscription, so there are no API costs, but every call uses quota that is shared with interactive work. That limit shapes the whole design.
 
-**Status:** Phases 1–4 are built: collection, rule-based Eligibility, Fit scoring with Digest and toast, and Job matching with Reopenings. The other AI steps are planned for Phases 5–9 and marked as such below.
+**Status:** Phases 1–5 are built: collection from the Bundesagentur and Indeed alert mails, rule-based Eligibility, Fit scoring with Digest and toast, and Job matching with Reopenings. The other AI steps are planned for Phases 8–9 and marked as such below.
 
 ```mermaid
 flowchart LR
     subgraph Sources
         BA[Bundesagentur API]
-        IM[Indeed alert mail<br/>IMAP]:::planned
+        IM[Indeed alert mail<br/>IMAP]
         CP[Career pages<br/>requests / Playwright]:::planned
     end
     subgraph Rules["Plain Python, no AI"]
@@ -81,6 +81,8 @@ python -m venv .venv
 - `private/companies.csv`: Target companies, with aliases for the names they use in job ads
 - `private/exclusions.txt`: title words that rule a job out (internships, theses, ...)
 - `private/search_terms.txt`: Search terms
+
+`init` also downloads the GeoNames postal codes for Germany and Switzerland into `data/geo/`, used to place jobs that come with a place name only. They are © GeoNames, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 `.env`, `private/` and `data/` are gitignored and never leave your machine.
 

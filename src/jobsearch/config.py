@@ -81,6 +81,10 @@ class Config:
         return self.data_dir / "digests"
 
     @property
+    def geo_path(self) -> Path:
+        return self.data_dir / "geo" / "places.tsv"
+
+    @property
     def companies_path(self) -> Path:
         return self.private_dir / "companies.csv"
 
