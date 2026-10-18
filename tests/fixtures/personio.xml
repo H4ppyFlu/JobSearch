@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<workzag-jobs>
+  <position>
+    <id>1001</id>
+    <subcompany>Muster Industrie GmbH</subcompany>
+    <office>Musterstadt</office>
+    <additionalOffices><office>Beispielstadt</office></additionalOffices>
+    <department>Engineering</department>
+    <name>Projektingenieur (m/w/d)</name>
+    <jobDescriptions>
+      <jobDescription><name>Deine Aufgaben</name><value><![CDATA[<ul><li>Anlagen planen</li><li>Projekte leiten</li></ul>]]></value></jobDescription>
+      <jobDescription><name>Dein Profil</name><value><![CDATA[<p>Studium Ingenieurwesen</p>]]></value></jobDescription>
+    </jobDescriptions>
+    <employmentType>permanent</employmentType>
+    <schedule>full-or-part-time</schedule>
+    <createdAt>2026-10-01T09:00:00+00:00</createdAt>
+  </position>
+  <position>
+    <id>1002</id>
+    <office>Remote</office>
+    <name>Softwareentwickler (m/w/d)</name>
+    <jobDescriptions></jobDescriptions>
+    <schedule>full-time</schedule>
+  </position>
+</workzag-jobs>

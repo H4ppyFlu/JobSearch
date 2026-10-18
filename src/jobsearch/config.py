@@ -43,6 +43,8 @@ class Config:
     imap_user: str = ""
     imap_password: str = ""
     imap_processed_folder: str = "verarbeitet"
+    model_extraction: str = "haiku"
+    career_scan_interval_days: int = 7
 
     def require_home(self) -> None:
         """The home location has no default, since it is personal. Fail clearly when it is not set."""
@@ -138,6 +140,8 @@ def load(root: Path | None = None) -> Config:
         imap_user=os.environ.get("IMAP_USER", "").strip(),
         imap_password=os.environ.get("IMAP_PASSWORD", "").strip(),
         imap_processed_folder=os.environ.get("IMAP_PROCESSED_FOLDER", "").strip() or "verarbeitet",
+        model_extraction=os.environ.get("MODEL_EXTRACTION", "").strip() or "haiku",
+        career_scan_interval_days=_int("CAREER_SCAN_INTERVAL_DAYS", 7),
     )
 
 

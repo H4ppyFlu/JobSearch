@@ -11,7 +11,8 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 - **Phase 5 done** (2026-10-18). A live run parsed six real alert mails, stored their Jobs and moved the mails. See "Phase 5 decisions".
 - **Phase 6 built** (2026-10-18). Tests cover once per day, the lock, the network retry and the 4-day catch-up, and a headless `pythonw -m jobsearch run` on a day with a successful run did nothing twice, as it should. Still open: registering the task and one run started by Task Scheduler, to confirm the Claude login is visible there. See "Phase 6 decisions".
 - **Phase 7 built** (2026-10-18). Tests go through the Flask test client, including the "Done when": a status with a note set in the dashboard appears in the next scoring prompt. On a copy of the live database every page rendered in well under a second. Waiting for the user's first look in the browser. See "Phase 7 decisions".
-- **Next: Phase 8** (career scan).
+- **Phase 8 built** (2026-10-18). Setup, scan, Personio feed, browser fallback and the two-scans report run live. A repeat scan on the same day sent one page out of more than twenty to the AI. Coverage depends on the setup's URLs: after the setup and one recheck, about three quarters of the Target companies had a URL, and about half of those delivered Postings. Roughly half of the pages needed the browser. The rest needs URLs checked by hand, see "Phase 8 decisions".
+- **Next: Phase 9** (Search terms derived from the Profile).
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
@@ -231,6 +232,20 @@ JobSearch/
   4. Postings then run through the normal Eligibility, matching and scoring.
 - Report companies whose page failed or returned no Postings for two scans in a row.
 - **Done when** the first full scan covers all companies and reports how many needed Playwright, and the second scan in the same week sends close to nothing to the AI.
+
+## Phase 8 decisions (2026-10-18)
+
+- **Setup answers by number, not by name.** The first live run failed because the model tidied up company names ("XY GmbH" became "XY"), so the check never matched. Each company now gets a number in the prompt.
+- **The setup finds landing pages more often than job lists.** About two thirds of the companies got a URL in the first pass, and most of those were general "Karriere" pages without the list itself. `career-setup --recheck` asks again for the companies whose page failed or listed nothing, and passes on what went wrong. Entries without problems are never overwritten. `companies.csv.bak` keeps the state from before the first setup.
+- **Static HTML first, browser only when needed.** Almost every German job title carries a gender marker like "(m/w/d)". A page without any is rendered with Playwright instead of being sent to the AI, which in the first scan would have saved most of the extraction calls. After rendering the page goes to the AI either way, since English pages have no marker.
+- **Playwright is optional** (`pip install -e ".[browser]"`, then `playwright install chromium`). Without it, such pages are reported as needing a browser and cost no AI call.
+- **The hash covers the visible text without URLs**, so tracking parameters in links do not count as a change. Rendered pages turned out stable between scans.
+- **An unchanged page keeps its Postings fresh.** Their `last_seen` moves to the scan date, otherwise a weekly page would look absent and later produce false Reopenings.
+- **Feeds before AI.** Personio's XML feed gives title, offices and full description without any AI call. Other ATS types were rare in the setup result (a couple of Workday and SuccessFactors sites), so they go through the page path for now.
+- **A Posting without a place gets the company's locations** from `companies.csv`. Many job lists show no place per job, and without one the Job would stay unclear and unscored.
+- **Descriptions without AI.** For new career Postings in reach, the linked job page is fetched and its visible text stored as the description, so the scoring sees more than the title.
+- **Reported after two scans in a row:** a page that fails (with the error) or lists no Postings. A changed URL starts counting from zero.
+- **The scan runs inside the Daily run when due** (`CAREER_SCAN_INTERVAL_DAYS`, default 7), before scoring, so its Jobs are scored in the same run. A scan whose AI step failed does not count as done. `jobsearch career-scan` runs it alone.
 
 ### Phase 9: Search terms derived from the Profile
 

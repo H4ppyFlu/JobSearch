@@ -12,6 +12,7 @@ from datetime import date
 from logging.handlers import RotatingFileHandler
 
 from . import config, db, geo, scheduler
+from .career import run_career_scan, scan_due
 from .companies import load_target_companies
 from .config import Config, ConfigError
 from .daily import run_daily
@@ -79,6 +80,12 @@ def cmd_status(cfg: Config) -> None:
     tiers = dict(conn.execute("SELECT tier, count(*) FROM fit_scores GROUP BY tier").fetchall())
     print(f"Fit scores: ★★★ {tiers.get(3, 0)}, ★★ {tiers.get(2, 0)}, ★ {tiers.get(1, 0)}; "
           f"warten auf Bewertung: {backlog(conn)}")
+    pages = conn.execute(
+        """SELECT count(*) n, sum(fail_count > 0) failing, sum(empty_count > 0) empty FROM career_pages"""
+    ).fetchone()
+    if pages["n"]:
+        print(f"Karriereseiten: {pages['n']} geprüft, zuletzt fehlgeschlagen: {pages['failing']}, "
+              f"ohne Stellen: {pages['empty']}")
     print("Letzte Läufe:")
     for row in conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 5"):
         state = {1: "ok", 0: "FEHLER", None: "läuft/abgebrochen"}[row["ok"]]
@@ -103,7 +110,26 @@ def cmd_score(cfg: Config, conn, limit: int | None = None, warnings: list[str] =
     return 0
 
 
-def cmd_daily(cfg: Config, score: bool) -> int:
+def career_scan(cfg: Config, conn, rules: Rules, targets) -> list[str]:
+    """Run the Career scan, print a summary, return warnings for the Digest."""
+    gazetteer = geo.Gazetteer.load(cfg.geo_path, (cfg.home_lat, cfg.home_lon))
+    try:
+        counts = run_career_scan(conn, cfg, targets, rules, gazetteer=gazetteer)
+    except Exception as e:  # the Daily run's own Jobs must still be scored and the Digest written
+        log.exception("Career scan failed")
+        return [f"Karriereseiten-Scan abgebrochen: {e}"]
+    print(f"Karriereseiten: {counts.pages} geprüft, {counts.unchanged} unverändert, {counts.extracted} ausgelesen, "
+          f"{counts.feeds} per Feed, {counts.new_jobs} neue Jobs")
+    warnings = list(counts.warnings)
+    if counts.error:
+        warnings.append(f"Karriereseiten nicht ausgelesen: {counts.error}")
+    for warning in warnings:
+        print(warning, file=sys.stderr)
+    return warnings
+
+
+def cmd_daily(cfg: Config, score: bool, career: str = "auto") -> int:
+    """career: 'auto' scans career pages when due, 'force' always, 'off' never."""
     cfg.require_home()
     terms = config.read_list_file(cfg.search_terms_path)
     if not terms:
@@ -123,6 +149,8 @@ def cmd_daily(cfg: Config, score: bool) -> int:
         warnings.append("Ortsdaten fehlen, Jobs aus Alert-Mails haben keine Entfernung. 'jobsearch init' ausführen.")
     if counts.alert_mails_unread:
         warnings.append(f"{counts.alert_mails_unread} Alert-Mail(s) ohne erkannte Jobs, sie liegen noch im Posteingang.")
+    if career == "force" or (career == "auto" and scan_due(conn, date.today(), cfg.career_scan_interval_days)):
+        warnings.extend(career_scan(cfg, conn, rules, targets))
     if score:
         status = max(status, cmd_score(cfg, conn, warnings=warnings))
     return status
@@ -172,6 +200,37 @@ def cmd_uninstall_task() -> int:
     return 0
 
 
+def cmd_career_scan(cfg: Config) -> int:
+    """Only the Career scan. Its new Jobs are scored by the next daily or score run."""
+    cfg.require_home()
+    rules = Rules(cfg.radius_km, cfg.radius_target_company_km, tuple(config.read_list_file(cfg.exclusions_path)))
+    warnings = career_scan(cfg, db.connect(cfg.db_path), rules, load_target_companies(cfg.companies_path))
+    return 1 if warnings else 0
+
+
+def cmd_career_setup(cfg: Config, recheck: bool) -> int:
+    from .career_setup import run_setup
+
+    problems = {}
+    if recheck:
+        conn = db.connect(cfg.db_path)
+        problems = {r["company"]: r["last_error"] or "die Seite zeigt keine Stellen"
+                    for r in conn.execute("SELECT * FROM career_pages WHERE fail_count > 0 OR empty_count > 0")}
+        print(f"Prüfe {len(problems)} Karriereseiten neu, die fehlschlugen oder keine Stellen zeigten.")
+    print("Suche Karriereseiten mit Websuche, das dauert ein paar Minuten ...")
+    result = run_setup(cfg.companies_path, model=cfg.model_scoring, recheck=problems)
+    print(f"Karriereseiten eingetragen: {result.filled}")
+    if result.not_found:
+        print("Nicht gefunden: " + ", ".join(result.not_found))
+    for note in result.notes:
+        print(f"Hinweis: {note}")
+    if result.error:
+        print(f"Abgebrochen: {result.error}. Erneut starten macht beim Rest weiter.", file=sys.stderr)
+        return 1
+    print(f"Bitte die Einträge in {cfg.companies_path} prüfen (Sicherung: companies.csv.bak).")
+    return 0
+
+
 def cmd_dashboard(cfg: Config, port: int, open_browser: bool) -> int:
     import socket
     import threading
@@ -199,11 +258,17 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="Überblick über Datenbank und letzte Läufe")
     daily = sub.add_parser("daily", help="Daily run: Postings sammeln, Eligibility prüfen, bewerten")
     daily.add_argument("--no-score", action="store_true", help="Nur sammeln, nicht bewerten")
+    daily.add_argument("--career", choices=["auto", "force", "off"], default="auto",
+                       help="Karriereseiten: wenn fällig (Standard), immer oder nie")
     score = sub.add_parser("score", help="Unbewertete Jobs bewerten, Digest schreiben")
     score.add_argument("--limit", type=int, help="Höchstens so viele Jobs (statt MAX_SCORED_PER_RUN)")
     sub.add_parser("run", help="Geplanter Lauf: Daily run, falls heute noch keiner erfolgreich war")
     sub.add_parser("install-task", help="Aufgabe in der Aufgabenplanung anlegen (bei Anmeldung)")
     sub.add_parser("uninstall-task", help="Aufgabe aus der Aufgabenplanung entfernen")
+    setup = sub.add_parser("career-setup", help="Karriereseiten der Zielunternehmen per Websuche finden")
+    setup.add_argument("--recheck", action="store_true",
+                       help="Auch Seiten neu suchen, die fehlschlugen oder keine Stellen zeigten")
+    sub.add_parser("career-scan", help="Nur die Karriereseiten prüfen (ohne Bewertung)")
     dashboard = sub.add_parser("dashboard", help="Dashboard im Browser öffnen")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
@@ -216,14 +281,16 @@ def main(argv: list[str] | None = None) -> int:
             cmd_init(cfg)
         elif args.command == "status":
             cmd_status(cfg)
-        elif args.command in ("daily", "score"):
+        elif args.command in ("daily", "score", "career-scan"):
             # The same lock as the scheduled run, so a manual run never overlaps it.
             with scheduler.RunLock(cfg.data_dir / "run.lock") as held:
                 if not held:
                     print("Ein anderer Lauf ist gerade aktiv, bitte später erneut versuchen.", file=sys.stderr)
                     return 1
                 if args.command == "daily":
-                    return cmd_daily(cfg, score=not args.no_score)
+                    return cmd_daily(cfg, score=not args.no_score, career=args.career)
+                if args.command == "career-scan":
+                    return cmd_career_scan(cfg)
                 return cmd_score(cfg, db.connect(cfg.db_path), args.limit)
         elif args.command == "run":
             return cmd_run(cfg)
@@ -231,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_install_task(cfg)
         elif args.command == "uninstall-task":
             return cmd_uninstall_task()
+        elif args.command == "career-setup":
+            return cmd_career_setup(cfg, args.recheck)
         elif args.command == "dashboard":
             return cmd_dashboard(cfg, args.port, not args.no_browser)
     except ConfigError as e:

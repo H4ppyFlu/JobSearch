@@ -1,6 +1,6 @@
 # JobSearch
 
-Daily, mostly automated job discovery for one candidate. It collects postings from the Bundesagentur für Arbeit (and later Indeed alert mails and company career pages), merges duplicates into real openings, decides with plain rules whether a job is in reach, and keeps everything in a local SQLite database. AI scoring runs through Claude Code on a subscription, with no API costs.
+Daily, mostly automated job discovery for one candidate. It collects postings from the Bundesagentur für Arbeit, Indeed alert mails and company career pages, merges duplicates into real openings, decides with plain rules whether a job is in reach, and keeps everything in a local SQLite database. AI scoring runs through Claude Code on a subscription, with no API costs.
 
 The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in [docs/adr](docs/adr/), and the build order is in [docs/implementation-plan.md](docs/implementation-plan.md).
 
@@ -8,24 +8,24 @@ The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in
 
 The pipeline is script first: plain Python does everything a rule can decide, and Claude only gets the few steps that need judgment ([ADR 0001](docs/adr/0001-script-first-ai-only-for-judgment.md)). The AI runs headless through `claude -p` on a Claude Pro subscription, so there are no API costs, but every call uses quota that is shared with interactive work. That limit shapes the whole design.
 
-**Status:** Phases 1–7 are built: collection from the Bundesagentur and Indeed alert mails, rule-based Eligibility, Fit scoring with Digest and toast, Job matching with Reopenings, a daily run started at logon, and a local dashboard with Feedback notes. The other AI steps are planned for Phases 8–9 and marked as such below.
+**Status:** Phases 1–8 are built: collection from the Bundesagentur, Indeed alert mails and Target companies' career pages, rule-based Eligibility, Fit scoring with Digest and toast, Job matching with Reopenings, a daily run started at logon, and a local dashboard with Feedback notes. Deriving Search terms from the Profile is planned for Phase 9 and marked as such below.
 
 ```mermaid
 flowchart LR
     subgraph Sources
         BA[Bundesagentur API]
         IM[Indeed alert mail<br/>IMAP]
-        CP[Career pages<br/>requests / Playwright]:::planned
+        CP[Career pages<br/>requests / Playwright]
     end
     subgraph Rules["Plain Python, no AI"]
         DD[Dedupe by source ID]
         EL[Eligibility<br/>radius, exclusions,<br/>full-remote phrases]
         CS[Candidate search<br/>same company + similar title]
-        HS[Page hash:<br/>changed pages only]:::planned
+        HS[Page hash:<br/>changed pages only]
     end
     subgraph AI["claude -p, batched, capped per run"]
         SC[Fit score<br/>+ same Job?<br/>+ Generic job flag]
-        EX[Extract Postings<br/>from page text]:::planned
+        EX[Extract Postings<br/>from page text]
     end
     subgraph Output
         DB[(SQLite)]
@@ -52,8 +52,8 @@ Dashed boxes are planned and not built yet.
 | Fit score for new eligible Jobs (**built**) | Sonnet | Profile, recent Feedback notes, rubric, up to `MAX_SCORED_PER_RUN` Jobs in one call | JSON per Job: tier (★★★/★★/★), German reasoning, matching and missing skills, remote and part-time signals | 3 |
 | Same Job across Sources? (**built**) | Sonnet | Candidate pairs found by plain rules | Same Job or not, in the same call as scoring | 4 |
 | Generic job flag (**built**) | Sonnet | The Job being scored | Flag that keeps multi-role and recruiter ads out of matching | 4 |
-| Extract Postings from career pages | Haiku | Visible text of pages whose hash changed | Posting JSON | 8 |
-| Find career pages (one-time setup, with web search) | not fixed yet | Company names | Career URL and ATS type, written back for a human to check | 8 |
+| Extract Postings from career pages (**built**) | Haiku | Visible text of pages whose hash changed, several pages per call | Posting JSON | 8 |
+| Find career pages (one-time setup, with web search, **built**) | Sonnet | Company names, and for a recheck what went wrong with the old URL | Career URL, ATS type and render mode, written back for a human to check | 8 |
 | Derive Search terms | not fixed yet | The Profile, only when its hash changes | 5–8 Search terms | 9 |
 
 ### Design principles
@@ -93,12 +93,16 @@ python -m venv .venv
 .venv\Scripts\python -m jobsearch score    # score only (--limit N for a cheap test)
 .venv\Scripts\python -m jobsearch status   # counts and the last runs
 .venv\Scripts\python -m jobsearch dashboard # local web page: Jobs, details, Job status and notes
+.venv\Scripts\python -m jobsearch career-setup [--recheck]  # find career pages with web search (one time)
+.venv\Scripts\python -m jobsearch career-scan  # check career pages now (otherwise weekly inside daily)
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again
 .venv\Scripts\python -m pytest             # tests, never touch the network
 ```
 
 The dashboard runs on `127.0.0.1` only and opens in the browser. It lists the Jobs with filters, marks those that are new since the last visit, and shows the full description, all Postings and the score reasoning per Job. Setting a Job status there can carry a Feedback note, and recent notes go into the next scoring prompt.
+
+The career scan reads `private/companies.csv`. `career-setup` fills in missing career page URLs with a web search and writes them back for you to check; `--recheck` looks again at pages that failed or listed nothing. Pages that only show jobs after JavaScript need the optional browser: `pip install -e ".[browser]"` and `playwright install chromium`.
 
 `install-task` registers a Windows Task Scheduler task for the current user. It starts `jobsearch run` without a console window, which does the Daily run at most once per day, catches up missed days, and shows problems as a toast. Logs are in `data/logs/`.
 

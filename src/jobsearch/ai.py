@@ -4,7 +4,8 @@ Every call gets a JSON schema, which the CLI enforces, so the answer arrives as
 parsed JSON in `structured_output`. The caller can add its own check on top. An
 answer that fails either check is asked for once more, then the call gives up.
 
-Flags keep each call small and inert: no tools, no MCP servers, no skills, a
+Flags keep each call small and inert: no tools (except web search for the one-time
+career page setup), no MCP servers, no skills, a
 short system prompt instead of the coding one, no saved session, and a neutral
 working directory so no project CLAUDE.md is loaded. --bare is not usable, since
 it ignores the subscription login and accepts only an API key.
@@ -48,7 +49,7 @@ Runner = Callable[..., subprocess.CompletedProcess]
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def command(model: str, schema: dict, system: str) -> list[str]:
+def command(model: str, schema: dict, system: str, tools: tuple[str, ...] = ()) -> list[str]:
     exe = shutil.which("claude")
     if not exe:
         raise AiError("Der Befehl 'claude' wurde nicht gefunden. Ist Claude Code installiert und im PATH?")
@@ -58,7 +59,8 @@ def command(model: str, schema: dict, system: str) -> list[str]:
         "--output-format", "json",
         "--json-schema", json.dumps(schema),
         "--system-prompt", system,
-        "--tools", "",
+        "--tools", ",".join(tools),
+        *(["--allowedTools", ",".join(tools)] if tools else []),
         "--strict-mcp-config",
         "--disable-slash-commands",
         "--no-session-persistence",
@@ -93,17 +95,19 @@ def ask(
     schema: dict,
     system: str,
     check: Callable[[dict], None] | None = None,
+    tools: tuple[str, ...] = (),
+    timeout: int = TIMEOUT_SECONDS,
     runner: Runner = subprocess.run,
 ) -> Answer:
     """Send the prompt on stdin and return the checked answer. Raises AiError."""
-    cmd = command(model, schema, system)
+    cmd = command(model, schema, system, tools)
     problem = ""
     for attempt in (1, 2):
         try:
             proc = runner(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
-                          timeout=TIMEOUT_SECONDS, cwd=tempfile.gettempdir(), creationflags=NO_WINDOW)
+                          timeout=timeout, cwd=tempfile.gettempdir(), creationflags=NO_WINDOW)
         except subprocess.TimeoutExpired:
-            raise AiError(f"Claude hat nach {TIMEOUT_SECONDS // 60} Minuten nicht geantwortet.") from None
+            raise AiError(f"Claude hat nach {timeout // 60} Minuten nicht geantwortet.") from None
         data, used_model = _parse(proc)
         try:
             if not isinstance(data, dict):
