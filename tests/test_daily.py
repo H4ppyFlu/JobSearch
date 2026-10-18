@@ -104,3 +104,28 @@ def test_remote_window_catches_up_missed_days(conn, cfg):
     assert remote_window_days(conn, date(2026, 10, 15), 14) == 5  # failed run does not count
     assert remote_window_days(conn, date(2026, 10, 11), 14) == 1
     assert remote_window_days(conn, date(2026, 12, 1), 14) == 14
+
+
+class TermClient(FakeClient):
+    """Returns different radius results per Search term."""
+
+    def __init__(self, by_term):
+        super().__init__(radius=[], nationwide=[])
+        self.by_term = by_term
+
+    def search(self, term, *, location=None, radius_km=None, published_within_days=None):
+        if location:
+            return iter(self.by_term.get(term, []))
+        return iter([])
+
+
+def test_search_terms_are_recorded_per_posting(conn, cfg):
+    shared = posting(1, "Projektingenieur")
+    client = TermClient({"Ingenieur": [shared, posting(2, "Entwicklungsingenieur")], "Projekt": [shared]})
+    run_daily(conn, cfg, client, TARGETS, RULES, ["Ingenieur", "Projekt"], today=date(2026, 10, 15))
+    run_daily(conn, cfg, client, TARGETS, RULES, ["Ingenieur", "Projekt"], today=date(2026, 10, 16))  # no duplicates
+    rows = conn.execute(
+        """SELECT p.source_id, t.term FROM posting_terms t JOIN postings p ON p.id = t.posting_id
+           ORDER BY p.source_id, t.term"""
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [("ID-1", "Ingenieur"), ("ID-1", "Projekt"), ("ID-2", "Ingenieur")]

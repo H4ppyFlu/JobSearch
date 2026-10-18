@@ -15,17 +15,18 @@
   {{ choice("status", "Status", STATUS_LABELS, "alle") }}
   {{ choice("eligibility", "Reichweite", ELIGIBILITY_LABELS, None) }}
   {{ choice("source", "Quelle", SOURCE_LABELS, "alle") }}
+  {{ choice("term", "Suchbegriff", terms, "alle") }}
   <label>Gefunden ab<input type="date" name="since" value="{{ chosen.since }}" onchange="this.form.submit()"></label>
   <noscript><button>Filtern</button></noscript>
   <span class="muted">{{ jobs|length }} Jobs</span>
 </form>
 <table>
   <thead>
-    <tr><th>Bewertung</th><th>Job</th><th class="hide-small">Ort</th><th class="hide-small">Gefunden</th></tr>
+    <tr><th>Bewertung</th><th>Job</th><th>Status</th><th class="hide-small">Suchbegriff</th><th class="hide-small">Ort</th><th class="hide-small">Gefunden</th></tr>
   </thead>
   <tbody>
   {% for job in jobs %}
-    <tr>
+    <tr id="job-{{ job.id }}">
       <td class="tier">{{ "★" * job.tier if job.tier else "–" }}</td>
       <td><a href="{{ url_for('job_detail', job_id=job.id) }}">{{ job.title }}</a>
         {%- if job.id > baseline %} <span class="badge new">neu</span>{% endif %}
@@ -33,13 +34,25 @@
         {%- if job.low_confidence %} <span class="badge">geringe Sicherheit</span>{% endif %}
         {%- if job.is_generic %} <span class="badge">Sammelanzeige</span>{% endif %}
         {%- if job.reopening_of %} <span class="badge">wieder ausgeschrieben</span>{% endif %}
-        {%- if job.status != "new" %} <span class="badge">{{ STATUS_LABELS[job.status] }}</span>{% endif %}
         <br><span class="muted">{{ job.company }}</span></td>
+      <td>
+        <form method="post" action="{{ url_for('set_status', job_id=job.id) }}">
+          <input type="hidden" name="token" value="{{ token }}">
+          <input type="hidden" name="next" value="{{ here }}#job-{{ job.id }}">
+          <select name="status" onchange="this.form.submit()" aria-label="Status">
+            {% for value, text in STATUS_LABELS.items() %}
+              <option value="{{ value }}" {{ "selected" if job.status == value }}>{{ text }}</option>
+            {% endfor %}
+          </select>
+          <noscript><button>OK</button></noscript>
+        </form>
+      </td>
+      <td class="hide-small">{{ job_terms.get(job.id, "") }}</td>
       <td class="hide-small">{{ job.location or "" }}</td>
       <td class="hide-small">{{ job.first_seen }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="4" class="muted">Keine Jobs gefunden.</td></tr>
+    <tr><td colspan="6" class="muted">Keine Jobs gefunden.</td></tr>
   {% endfor %}
   </tbody>
 </table>

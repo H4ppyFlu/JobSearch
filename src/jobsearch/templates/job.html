@@ -11,6 +11,7 @@
     {{ ELIGIBILITY_LABELS[job.eligibility] }}{% if job.ineligible_reason %} ({{ job.ineligible_reason }}){% endif %}
     {%- if job.is_target_company %} <span class="badge target">Zielunternehmen</span>{% endif %}
     {%- if job.is_generic %} <span class="badge">Sammelanzeige</span>{% endif %}</div>
+  {% if terms %}<div class="muted">Gefunden über: {{ terms|join(", ") }}</div>{% endif %}
 </div>
 
 <div class="card">

@@ -227,3 +227,48 @@ def test_a_note_without_a_new_status_keeps_the_change_date(cfg, conn):
 
 def test_error_pages_are_german(client):
     assert "nicht gefunden" in client.get("/job/999").get_data(as_text=True)
+
+
+def test_status_can_be_set_straight_from_the_list(client, conn):
+    job = add_job(conn, "Werkstudent Vertrieb")
+    html = page(client, "/?tier=none")
+    token = re.search(r'name="token" value="([^"]+)"', html)[1]
+    assert f'action="/job/{job}/status"' in html
+    response = client.post(f"/job/{job}/status", data={"status": "not_interesting", "token": token,
+                                                        "next": "/?tier=none"})
+    assert response.status_code == 303 and response.headers["Location"] == "/?tier=none"
+    assert conn.execute("SELECT status FROM jobs").fetchone()[0] == "not_interesting"
+
+
+@pytest.mark.parametrize("target", ["https://evil.example/", "//evil.example/", "job/1"])
+def test_redirect_after_status_stays_on_the_dashboard(client, conn, target):
+    job = add_job(conn, "Projektingenieur")
+    token = re.search(r'name="token" value="([^"]+)"', page(client))[1]
+    response = client.post(f"/job/{job}/status", data={"status": "applied", "token": token, "next": target})
+    assert response.headers["Location"] == f"/job/{job}"
+
+
+def test_search_term_filter(client, conn):
+    found_twice = add_job(conn, "Alpha Projektingenieur")
+    found_once = add_job(conn, "Beta Simulationsingenieur")
+    add_job(conn, "Gamma aus Alert-Mail", source="indeed")
+    with conn:
+        conn.executemany(
+            "INSERT INTO posting_terms (posting_id, term) SELECT id, ? FROM postings WHERE job_id = ?",
+            [("Projektingenieur", found_twice), ("Simulation", found_twice), ("Simulation", found_once)],
+        )
+    html = page(client)
+    assert '<option value="Projektingenieur"' in html and '<option value="Simulation"' in html
+    assert {n for n in ("Alpha", "Beta", "Gamma") if f"{n} " in page(client, "/?term=Simulation")} == {"Alpha", "Beta"}
+    assert {n for n in ("Alpha", "Beta", "Gamma") if f"{n} " in page(client, "/?term=Projektingenieur")} == {"Alpha"}
+    assert "Gefunden über: Projektingenieur, Simulation" in page(client, f"/job/{found_twice}")
+
+
+def test_list_shows_the_search_terms_per_job(client, conn):
+    job = add_job(conn, "Projektingenieur")
+    with conn:
+        conn.executemany("INSERT INTO posting_terms (posting_id, term) SELECT id, ? FROM postings WHERE job_id = ?",
+                         [("Simulation", job), ("Projektingenieur", job)])
+    html = page(client)
+    assert "<th class=\"hide-small\">Suchbegriff</th>" in html
+    assert '<td class="hide-small">Projektingenieur, Simulation</td>' in html

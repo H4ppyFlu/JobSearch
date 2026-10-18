@@ -89,19 +89,35 @@ def place(posting: Posting, cfg: Config, targets: list[TargetCompany]) -> Placem
     return Placement(best, nearest, match_target_company(posting.company, targets) is not None)
 
 
-def collect(client: BundesagenturClient, cfg: Config, terms: list[str], window: int, counts: Counts) -> dict[str, Posting]:
+def collect(client: BundesagenturClient, cfg: Config, terms: list[str], window: int,
+            counts: Counts) -> tuple[dict[str, Posting], dict[str, set[str]]]:
+    """Postings by source ID, and the Search terms that found each of them."""
     found: dict[str, Posting] = {}
+    found_by: dict[str, set[str]] = {}
+
+    def keep(p: Posting, term: str) -> None:
+        found.setdefault(p.source_id, p)
+        found_by.setdefault(p.source_id, set()).add(term)
+
     for term in terms:
         try:
             for p in client.search(term, location=cfg.home_location, radius_km=cfg.radius_target_company_km):
-                found.setdefault(p.source_id, p)
+                keep(p, term)
             for p in client.search(term, published_within_days=window):
                 if p.homeoffice_possible:
-                    found.setdefault(p.source_id, p)
+                    keep(p, term)
         except (requests.RequestException, SchemaChanged, ValueError) as e:
             log.error("Bundesagentur search for %r failed: %s", term, e)
             counts.errors.append(f"Suche '{term}': {e}")
-    return found
+    return found, found_by
+
+
+def record_terms(conn: sqlite3.Connection, found_by: dict[str, set[str]]) -> None:
+    conn.executemany(
+        """INSERT OR IGNORE INTO posting_terms (posting_id, term)
+           SELECT id, ? FROM postings WHERE source = 'bundesagentur' AND source_id = ?""",
+        [(term, source_id) for source_id, terms in found_by.items() for term in terms],
+    )
 
 
 def fetch_missing_descriptions(conn: sqlite3.Connection, client: BundesagenturClient, counts: Counts) -> None:
@@ -203,11 +219,12 @@ def run_daily(
     try:
         window = remote_window_days(conn, today, cfg.remote_max_window_days)
         log.info("Daily run: %d Search terms, remote window %d days", len(terms), window)
-        found = collect(client, cfg, terms, window, counts)
+        found, found_by = collect(client, cfg, terms, window, counts)
         counts.postings_seen = len(found)
         index = JobIndex.load(conn)
         with conn:
             store_postings(conn, found.values(), cfg, targets, rules, index, today, counts)
+            record_terms(conn, found_by)
         if mailbox is not None:
             collect_mail(conn, mailbox, cfg, targets, rules, index, today, counts)
         fetch_missing_descriptions(conn, client, counts)

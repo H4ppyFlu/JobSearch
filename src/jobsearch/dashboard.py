@@ -41,6 +41,7 @@ def job_filter(args) -> tuple[str, list, dict]:
         "status": args.get("status", ""),
         "eligibility": args.get("eligibility", "reach"),
         "source": args.get("source", ""),
+        "term": args.get("term", ""),
         "since": args.get("since", ""),
     }
     if chosen["tier"] == "none":
@@ -59,6 +60,10 @@ def job_filter(args) -> tuple[str, list, dict]:
     if chosen["source"] in SOURCE_LABELS:
         where.append("EXISTS (SELECT 1 FROM postings p WHERE p.job_id = j.id AND p.source = ?)")
         params.append(chosen["source"])
+    if chosen["term"]:
+        where.append("""EXISTS (SELECT 1 FROM postings p JOIN posting_terms t ON t.posting_id = p.id
+                                WHERE p.job_id = j.id AND t.term = ?)""")
+        params.append(chosen["term"])
     try:
         where.append("j.first_seen >= ?")
         params.append(date.fromisoformat(chosen["since"]).isoformat())
@@ -89,6 +94,22 @@ def visit_baseline(conn: sqlite3.Connection, now: datetime) -> int:
     except sqlite3.OperationalError as e:  # a Daily run holds the write lock; the page still works
         log.warning("Could not record the visit: %s", e)
     return baseline
+
+
+def term_options(conn: sqlite3.Connection) -> dict[str, str]:
+    """Search terms that found something, with the number of Jobs each one found."""
+    rows = conn.execute(
+        """SELECT t.term, count(DISTINCT p.job_id) n FROM posting_terms t JOIN postings p ON p.id = t.posting_id
+           GROUP BY t.term ORDER BY t.term"""
+    ).fetchall()
+    return {r["term"]: f"{r['term']} ({r['n']})" for r in rows}
+
+
+def terms_by_job(conn: sqlite3.Connection) -> dict[int, str]:
+    found: dict[int, set[str]] = {}
+    for row in conn.execute("SELECT p.job_id, t.term FROM posting_terms t JOIN postings p ON p.id = t.posting_id"):
+        found.setdefault(row["job_id"], set()).add(row["term"])
+    return {job_id: ", ".join(sorted(terms)) for job_id, terms in found.items()}
 
 
 def reopening_chain(conn: sqlite3.Connection, job_id: int) -> list[sqlite3.Row]:
@@ -151,7 +172,9 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
                 ORDER BY f.tier IS NULL, f.tier DESC, j.first_seen DESC, j.id DESC""",
             params,
         ).fetchall()
-        return render_template("jobs.html", jobs=rows, chosen=chosen, baseline=visit_baseline(conn(), now()))
+        return render_template("jobs.html", jobs=rows, chosen=chosen, baseline=visit_baseline(conn(), now()),
+                               terms=term_options(conn()), job_terms=terms_by_job(conn()),
+                               token=token, here=request.full_path.rstrip("?"))
 
     @app.get("/job/<int:job_id>")
     def job_detail(job_id: int):
@@ -168,11 +191,14 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
             score = dict(row)
             score["matching"] = json.loads(row["matching_skills"] or "[]")
             score["missing"] = json.loads(row["missing_skills"] or "[]")
+        terms = [r[0] for r in conn().execute(
+            """SELECT DISTINCT t.term FROM posting_terms t JOIN postings p ON p.id = t.posting_id
+               WHERE p.job_id = ? ORDER BY t.term""", (job_id,))]
         notes = conn().execute(
             "SELECT * FROM feedback_notes WHERE job_id = ? ORDER BY created_at DESC, id DESC", (job_id,)).fetchall()
         visit_baseline(conn(), now())
         return render_template("job.html", job=job, postings=postings, description=description, score=score,
-                               chain=reopening_chain(conn(), job_id), notes=notes, token=token)
+                               chain=reopening_chain(conn(), job_id), notes=notes, token=token, terms=terms)
 
     @app.post("/job/<int:job_id>/status")
     def set_status(job_id: int):
@@ -197,6 +223,9 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
             if note:
                 c.execute("INSERT INTO feedback_notes (job_id, status, note, created_at) VALUES (?, ?, ?, ?)",
                           (job_id, status, note, stamp.isoformat(timespec="seconds")))
-        return redirect(url_for("job_detail", job_id=job_id), code=303)
+        back = request.form.get("next", "")
+        if not back.startswith("/") or back.startswith("//") or "\\" in back:  # only pages of this app
+            back = url_for("job_detail", job_id=job_id)
+        return redirect(back, code=303)
 
     return app
