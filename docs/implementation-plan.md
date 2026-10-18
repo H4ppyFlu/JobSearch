@@ -10,7 +10,8 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 - **Phase 4 done** (2026-10-15). Fixture tests cover the four cases, and a live scoring run decided real candidate pairs correctly. See "Phase 4 decisions".
 - **Phase 5 done** (2026-10-18). A live run parsed six real alert mails, stored their Jobs and moved the mails. See "Phase 5 decisions".
 - **Phase 6 built** (2026-10-18). Tests cover once per day, the lock, the network retry and the 4-day catch-up, and a headless `pythonw -m jobsearch run` on a day with a successful run did nothing twice, as it should. Still open: registering the task and one run started by Task Scheduler, to confirm the Claude login is visible there. See "Phase 6 decisions".
-- **Next: Phase 7** (dashboard), once the task check is done.
+- **Phase 7 built** (2026-10-18). Tests go through the Flask test client, including the "Done when": a status with a note set in the dashboard appears in the next scoring prompt. On a copy of the live database every page rendered in well under a second. Waiting for the user's first look in the browser. See "Phase 7 decisions".
+- **Next: Phase 8** (career scan).
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
@@ -206,6 +207,16 @@ JobSearch/
 - Status buttons with an optional Feedback note. "applied" sets `applied_on` to today.
 - German labels, read and write on the same SQLite file.
 - **Done when** a status change in the browser shows up in the next scoring prompt's Feedback notes.
+
+## Phase 7 decisions (2026-10-18)
+
+- **Server-rendered Flask with Jinja templates**, no JavaScript build. The filters submit on change; without JavaScript there is a button.
+- **The list hides ineligible Jobs by default** ("in Reichweite oder unklar"). "alle" and "außerhalb" make them visible, to find wrong filter decisions.
+- **"New since last visit" uses Job ids**, not dates: the dashboard remembers the highest Job id of the previous visit in a small `meta` table (migration 003). Page views less than an hour apart count as one visit, detail pages included, so filtering and reading keep the markers. A visit ends after eight hours at the latest. The very first visit marks everything as new. If a run holds the write lock, the visit is just not recorded and the page still loads.
+- **Local only:** the server listens on `127.0.0.1`, refuses requests with another host name (against DNS rebinding), and status changes need a token created at each start. Any web page could otherwise send a form to `127.0.0.1` and change a status, and with it the scoring prompt.
+- **"applied" sets `applied_on` only once.** Choosing it again later keeps the first date.
+- **A Feedback note is stored only when text is entered**, together with the status chosen at that moment. The scoring prompt already reads the most recent notes (`FEEDBACK_NOTES_IN_PROMPT`).
+- **The Reopening chain** follows `reopening_of` in both directions, so every advertisement of the same opening links to the others.
 
 ### Phase 8: Career scan
 

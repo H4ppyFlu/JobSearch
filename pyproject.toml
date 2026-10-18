@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
     "python-dotenv>=1.0",
+    "flask>=3.0",
     "win11toast>=0.35; sys_platform == 'win32'",
 ]
 
@@ -24,7 +25,7 @@ jobsearch = "jobsearch.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-jobsearch = ["migrations/*.sql", "prompts/*.md"]
+jobsearch = ["migrations/*.sql", "prompts/*.md", "templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

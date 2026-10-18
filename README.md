@@ -8,7 +8,7 @@ The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in
 
 The pipeline is script first: plain Python does everything a rule can decide, and Claude only gets the few steps that need judgment ([ADR 0001](docs/adr/0001-script-first-ai-only-for-judgment.md)). The AI runs headless through `claude -p` on a Claude Pro subscription, so there are no API costs, but every call uses quota that is shared with interactive work. That limit shapes the whole design.
 
-**Status:** Phases 1–6 are built: collection from the Bundesagentur and Indeed alert mails, rule-based Eligibility, Fit scoring with Digest and toast, Job matching with Reopenings, and a daily run started at logon. The other AI steps are planned for Phases 8–9 and marked as such below.
+**Status:** Phases 1–7 are built: collection from the Bundesagentur and Indeed alert mails, rule-based Eligibility, Fit scoring with Digest and toast, Job matching with Reopenings, a daily run started at logon, and a local dashboard with Feedback notes. The other AI steps are planned for Phases 8–9 and marked as such below.
 
 ```mermaid
 flowchart LR
@@ -30,7 +30,7 @@ flowchart LR
     subgraph Output
         DB[(SQLite)]
         DG[Digest + toast]
-        DA[Dashboard<br/>status + Feedback note]:::planned
+        DA[Dashboard<br/>status + Feedback note]
     end
     BA --> DD
     IM --> DD
@@ -92,10 +92,13 @@ python -m venv .venv
 .venv\Scripts\python -m jobsearch daily    # collect, check Eligibility, fetch descriptions, score, Digest
 .venv\Scripts\python -m jobsearch score    # score only (--limit N for a cheap test)
 .venv\Scripts\python -m jobsearch status   # counts and the last runs
+.venv\Scripts\python -m jobsearch dashboard # local web page: Jobs, details, Job status and notes
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again
 .venv\Scripts\python -m pytest             # tests, never touch the network
 ```
+
+The dashboard runs on `127.0.0.1` only and opens in the browser. It lists the Jobs with filters, marks those that are new since the last visit, and shows the full description, all Postings and the score reasoning per Job. Setting a Job status there can carry a Feedback note, and recent notes go into the next scoring prompt.
 
 `install-task` registers a Windows Task Scheduler task for the current user. It starts `jobsearch run` without a console window, which does the Daily run at most once per day, catches up missed days, and shows problems as a toast. Logs are in `data/logs/`.
 

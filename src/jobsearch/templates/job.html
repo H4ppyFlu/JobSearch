@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} – JobSearch{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('jobs') }}">← Alle Jobs</a></p>
+<div class="card">
+  <h1 style="margin:0 0 4px;font-size:22px">{{ job.title }}</h1>
+  <div>{{ job.company }}{% if job.location %} · {{ job.location }}{% endif %}
+    {%- if job.distance_km is not none %} · {{ job.distance_km|round|int }} km{% endif %}
+    {%- if REMOTE_LABELS.get(job.remote_type) %} · {{ REMOTE_LABELS[job.remote_type] }}{% endif %}</div>
+  <div class="muted">Gefunden {{ job.first_seen }}, zuletzt gesehen {{ job.last_seen }} ·
+    {{ ELIGIBILITY_LABELS[job.eligibility] }}{% if job.ineligible_reason %} ({{ job.ineligible_reason }}){% endif %}
+    {%- if job.is_target_company %} <span class="badge target">Zielunternehmen</span>{% endif %}
+    {%- if job.is_generic %} <span class="badge">Sammelanzeige</span>{% endif %}</div>
+</div>
+
+<div class="card">
+  <form method="post" action="{{ url_for('set_status', job_id=job.id) }}">
+    <input type="hidden" name="token" value="{{ token }}">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px">
+      <strong>Status:</strong>
+      {% for value, text in STATUS_LABELS.items() %}
+        <label><input type="radio" name="status" value="{{ value }}" {{ "checked" if job.status == value }}> {{ text }}</label>
+      {% endfor %}
+    </div>
+    <textarea name="note" rows="2" style="width:100%"
+              placeholder="Notiz (optional), zum Beispiel warum der Job (nicht) passt. Fließt in künftige Bewertungen ein."></textarea>
+    <div style="margin-top:8px"><button class="primary">Speichern</button>
+      {% if job.applied_on %}<span class="muted">Beworben am {{ job.applied_on }}</span>{% endif %}</div>
+  </form>
+  {% if notes %}
+  <ul>
+    {% for n in notes %}<li><span class="muted">{{ n.created_at[:10] }}, {{ STATUS_LABELS.get(n.status, n.status) }}:</span> {{ n.note }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
+{% if score %}
+<div class="card">
+  <h2 style="margin-top:0;font-size:17px"><span class="tier">{{ "★" * score.tier }}</span> Bewertung
+    {%- if score.low_confidence %} <span class="badge">geringe Sicherheit</span>{% endif %}</h2>
+  <p>{{ score.reasoning }}</p>
+  {% if score.matching %}<p><strong>Passt:</strong> {{ score.matching|join(", ") }}</p>{% endif %}
+  {% if score.missing %}<p><strong>Fehlt:</strong> {{ score.missing|join(", ") }}</p>{% endif %}
+  <p class="muted">Bewertet {{ score.scored_at[:10] }} mit {{ score.model }}</p>
+</div>
+{% endif %}
+
+{% if chain|length > 1 %}
+<div class="card">
+  <h2 style="margin-top:0;font-size:17px">Ausschreibungen dieser Stelle</h2>
+  <ul>
+  {% for item in chain %}
+    <li>{% if item.id == job.id %}<strong>{{ item.first_seen }} bis {{ item.last_seen }} (diese)</strong>
+        {% else %}<a href="{{ url_for('job_detail', job_id=item.id) }}">{{ item.first_seen }} bis {{ item.last_seen }}</a>
+          <span class="muted">{{ STATUS_LABELS[item.status] }}</span>{% endif %}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 style="margin-top:0;font-size:17px">Anzeigen</h2>
+  <ul>
+  {% for p in postings %}
+    <li>{% if p.url %}<a href="{{ p.url }}" target="_blank" rel="noopener">{{ SOURCE_LABELS[p.source] }}</a>{% else %}{{ SOURCE_LABELS[p.source] }}{% endif %}:
+      {{ p.title }} <span class="muted">({{ p.first_seen }} bis {{ p.last_seen }}{% if p.is_snippet %}, nur Ausschnitt{% endif %})</span></li>
+  {% endfor %}
+  </ul>
+</div>
+
+{% if description %}
+<div class="card">
+  <h2 style="margin-top:0;font-size:17px">Beschreibung</h2>
+  <div class="description">{{ description }}</div>
+</div>
+{% endif %}
+{% endblock %}

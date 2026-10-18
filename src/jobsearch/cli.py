@@ -1,4 +1,4 @@
-"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task."""
+"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task | dashboard."""
 
 from __future__ import annotations
 
@@ -172,6 +172,25 @@ def cmd_uninstall_task() -> int:
     return 0
 
 
+def cmd_dashboard(cfg: Config, port: int, open_browser: bool) -> int:
+    import socket
+    import threading
+    import webbrowser
+
+    from .dashboard import create_app
+
+    with socket.socket() as probe:  # before the browser opens on whatever else holds the port
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            print(f"Port {port} ist schon belegt, läuft das Dashboard schon? Sonst --port wählen.", file=sys.stderr)
+            return 1
+    url = f"http://127.0.0.1:{port}/"
+    print(f"Dashboard: {url} (beenden mit Strg+C)")
+    if open_browser:
+        threading.Timer(1.0, webbrowser.open, (url,)).start()
+    create_app(cfg).run(host="127.0.0.1", port=port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="jobsearch")
     parser.add_argument("-v", "--verbose", action="store_true", help="Log auch auf der Konsole ausgeben")
@@ -185,6 +204,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run", help="Geplanter Lauf: Daily run, falls heute noch keiner erfolgreich war")
     sub.add_parser("install-task", help="Aufgabe in der Aufgabenplanung anlegen (bei Anmeldung)")
     sub.add_parser("uninstall-task", help="Aufgabe aus der Aufgabenplanung entfernen")
+    dashboard = sub.add_parser("dashboard", help="Dashboard im Browser öffnen")
+    dashboard.add_argument("--port", type=int, default=8765)
+    dashboard.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
     args = parser.parse_args(argv)
 
     try:
@@ -209,6 +231,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_install_task(cfg)
         elif args.command == "uninstall-task":
             return cmd_uninstall_task()
+        elif args.command == "dashboard":
+            return cmd_dashboard(cfg, args.port, not args.no_browser)
     except ConfigError as e:
         print(f"Konfiguration: {e}", file=sys.stderr)
         if args.command == "run":

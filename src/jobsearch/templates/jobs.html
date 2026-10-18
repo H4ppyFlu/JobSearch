@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% macro choice(name, label, options, empty) %}
+  <label>{{ label }}
+    <select name="{{ name }}" onchange="this.form.submit()">
+      {% if empty %}<option value="">{{ empty }}</option>{% endif %}
+      {% for value, text in options.items() %}
+        <option value="{{ value }}" {{ "selected" if chosen[name] == value }}>{{ text }}</option>
+      {% endfor %}
+    </select>
+  </label>
+{% endmacro %}
+{% block content %}
+<form class="filters" method="get">
+  {{ choice("tier", "Bewertung", TIER_LABELS, "alle") }}
+  {{ choice("status", "Status", STATUS_LABELS, "alle") }}
+  {{ choice("eligibility", "Reichweite", ELIGIBILITY_LABELS, None) }}
+  {{ choice("source", "Quelle", SOURCE_LABELS, "alle") }}
+  <label>Gefunden ab<input type="date" name="since" value="{{ chosen.since }}" onchange="this.form.submit()"></label>
+  <noscript><button>Filtern</button></noscript>
+  <span class="muted">{{ jobs|length }} Jobs</span>
+</form>
+<table>
+  <thead>
+    <tr><th>Bewertung</th><th>Job</th><th class="hide-small">Ort</th><th class="hide-small">Gefunden</th></tr>
+  </thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr>
+      <td class="tier">{{ "★" * job.tier if job.tier else "–" }}</td>
+      <td><a href="{{ url_for('job_detail', job_id=job.id) }}">{{ job.title }}</a>
+        {%- if job.id > baseline %} <span class="badge new">neu</span>{% endif %}
+        {%- if job.is_target_company %} <span class="badge target">Zielunternehmen</span>{% endif %}
+        {%- if job.low_confidence %} <span class="badge">geringe Sicherheit</span>{% endif %}
+        {%- if job.is_generic %} <span class="badge">Sammelanzeige</span>{% endif %}
+        {%- if job.reopening_of %} <span class="badge">wieder ausgeschrieben</span>{% endif %}
+        {%- if job.status != "new" %} <span class="badge">{{ STATUS_LABELS[job.status] }}</span>{% endif %}
+        <br><span class="muted">{{ job.company }}</span></td>
+      <td class="hide-small">{{ job.location or "" }}</td>
+      <td class="hide-small">{{ job.first_seen }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">Keine Jobs gefunden.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
