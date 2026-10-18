@@ -8,7 +8,7 @@ The vocabulary is defined in [CONTEXT.md](CONTEXT.md), the main decisions are in
 
 The pipeline is script first: plain Python does everything a rule can decide, and Claude only gets the few steps that need judgment ([ADR 0001](docs/adr/0001-script-first-ai-only-for-judgment.md)). The AI runs headless through `claude -p` on a Claude Pro subscription, so there are no API costs, but every call uses quota that is shared with interactive work. That limit shapes the whole design.
 
-**Status:** Phases 1–5 are built: collection from the Bundesagentur and Indeed alert mails, rule-based Eligibility, Fit scoring with Digest and toast, and Job matching with Reopenings. The other AI steps are planned for Phases 8–9 and marked as such below.
+**Status:** Phases 1–6 are built: collection from the Bundesagentur and Indeed alert mails, rule-based Eligibility, Fit scoring with Digest and toast, Job matching with Reopenings, and a daily run started at logon. The other AI steps are planned for Phases 8–9 and marked as such below.
 
 ```mermaid
 flowchart LR
@@ -92,8 +92,12 @@ python -m venv .venv
 .venv\Scripts\python -m jobsearch daily    # collect, check Eligibility, fetch descriptions, score, Digest
 .venv\Scripts\python -m jobsearch score    # score only (--limit N for a cheap test)
 .venv\Scripts\python -m jobsearch status   # counts and the last runs
+.venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
+.venv\Scripts\python -m jobsearch uninstall-task  # remove that task again
 .venv\Scripts\python -m pytest             # tests, never touch the network
 ```
+
+`install-task` registers a Windows Task Scheduler task for the current user. It starts `jobsearch run` without a console window, which does the Daily run at most once per day, catches up missed days, and shows problems as a toast. Logs are in `data/logs/`.
 
 ## How Eligibility works
 

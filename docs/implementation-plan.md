@@ -9,7 +9,8 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 - **Phase 3 done** (2026-10-15). The live daily run scored 40 Jobs in one call. The user reviewed the first Digest and found the scores and reasoning sound. There was no formal tally against their own ratings yet. See "Phase 3 decisions".
 - **Phase 4 done** (2026-10-15). Fixture tests cover the four cases, and a live scoring run decided real candidate pairs correctly. See "Phase 4 decisions".
 - **Phase 5 done** (2026-10-18). A live run parsed six real alert mails, stored their Jobs and moved the mails. See "Phase 5 decisions".
-- **Next: Phase 6** (scheduling).
+- **Phase 6 built** (2026-10-18). Tests cover once per day, the lock, the network retry and the 4-day catch-up, and a headless `pythonw -m jobsearch run` on a day with a successful run did nothing twice, as it should. Still open: registering the task and one run started by Task Scheduler, to confirm the Claude login is visible there. See "Phase 6 decisions".
+- **Next: Phase 7** (dashboard), once the task check is done.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
@@ -187,6 +188,16 @@ JobSearch/
 - Logging to `data/logs/` with rotation.
 - **Done when** two logons on one day give exactly one run, and a simulated 4-day gap catches up 4 days.
 
+## Phase 6 decisions (2026-10-18)
+
+- **"Done today" means a Daily run finished today, with or without errors.** Otherwise a lasting error (a wrong mail password) would repeat the whole run and its AI call at every logon. The errors are in the Digest and the toast, and the next day's remote window still reaches back to the last run without errors.
+- **The lock is an OS file lock** (`data/run.lock`), not a PID file. Windows drops it when the process dies, so a crash never blocks later runs. Manual `daily` and `score` take the same lock, so they never overlap the scheduled run.
+- **Network check:** a TCP connect to the Bundesagentur host, retried after 30, 60 and 120 seconds. Then a toast, and the next logon tries again.
+- **The task is defined as XML** and registered with `schtasks /XML`, since plain `schtasks` options cannot set a logon delay together with "run on battery" and "only in the user's session". It runs with the user's interactive token and least privilege, so `claude -p` sees the user's login.
+- **Headless means no console.** Under `pythonw` there is no stderr, so the console log handler is skipped, every failure ends in the log and a toast, and `claude -p` is started without a window (`CREATE_NO_WINDOW`).
+- **Logs rotate** at about 1 MB, five files kept.
+- **The Career scan is not part of `run` yet.** It joins in Phase 8, using `CAREER_SCAN_INTERVAL_DAYS`.
+
 ### Phase 7: Dashboard
 
 - `jobsearch dashboard`: Flask on `127.0.0.1`, opens the browser.
@@ -226,5 +237,5 @@ JobSearch/
 - **Unofficial API:** the Bundesagentur API is public but not formally supported, and it already moved from v4 to v6. Keep the client small and fail loudly on schema changes.
 - **Indeed mail format** can change without notice. The parser fails visibly, since mails stay in the inbox.
 - **Pro quota:** the per-run cap and the Haiku extraction keep usage low. Watch the first week and tune `MAX_SCORED_PER_RUN`.
-- **Claude login inside Task Scheduler:** check in Phase 6 that `claude -p` sees the login when started from a logon task.
+- **Claude login inside Task Scheduler:** the task runs in the user's session, which should be enough. Confirm with the first run started by the task (see Progress).
 - **Career pages** change layout and URLs. The "no Postings twice in a row" report catches this.

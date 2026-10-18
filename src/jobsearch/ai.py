@@ -44,6 +44,8 @@ class Answer:
 
 
 Runner = Callable[..., subprocess.CompletedProcess]
+# Started from pythonw by Task Scheduler, a console program would otherwise open a window.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def command(model: str, schema: dict, system: str) -> list[str]:
@@ -99,7 +101,7 @@ def ask(
     for attempt in (1, 2):
         try:
             proc = runner(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
-                          timeout=TIMEOUT_SECONDS, cwd=tempfile.gettempdir())
+                          timeout=TIMEOUT_SECONDS, cwd=tempfile.gettempdir(), creationflags=NO_WINDOW)
         except subprocess.TimeoutExpired:
             raise AiError(f"Claude hat nach {TIMEOUT_SECONDS // 60} Minuten nicht geantwortet.") from None
         data, used_model = _parse(proc)

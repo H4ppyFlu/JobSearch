@@ -1,4 +1,4 @@
-"""Command line entry point: jobsearch init | status | daily | score."""
+"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task."""
 
 from __future__ import annotations
 
@@ -7,28 +7,34 @@ import json
 import logging
 import shutil
 import sys
+import time
 from datetime import date
+from logging.handlers import RotatingFileHandler
 
-from . import config, db, geo
+from . import config, db, geo, scheduler
 from .companies import load_target_companies
 from .config import Config, ConfigError
 from .daily import run_daily
 from .digest import write_digest
 from .eligibility import Rules
-from .notify import notify
+from .notify import notify, toast
 from .scoring import backlog, run_scoring
 from .sources.bundesagentur import BundesagenturClient
 from .sources.indeed_mail import Mailbox
 
+log = logging.getLogger(__name__)
 
 def _setup_logging(cfg: Config, verbose: bool) -> None:
     log_dir = cfg.data_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    handlers: list[logging.Handler] = [logging.FileHandler(log_dir / "jobsearch.log", encoding="utf-8")]
-    stream = logging.StreamHandler()
-    stream.setLevel(logging.DEBUG if verbose else logging.WARNING)
-    handlers.append(stream)
+    handlers: list[logging.Handler] = [
+        RotatingFileHandler(log_dir / "jobsearch.log", maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+    ]
+    if sys.stderr:  # None under pythonw, as started by Task Scheduler
+        stream = logging.StreamHandler()
+        stream.setLevel(logging.DEBUG if verbose else logging.WARNING)
+        handlers.append(stream)
     logging.basicConfig(level=logging.INFO, format=fmt, handlers=handlers)
 
 
@@ -90,7 +96,7 @@ def cmd_score(cfg: Config, conn, limit: int | None = None, warnings: list[str] =
           f"zusammengeführt: {counts.merged}, Sammelanzeigen: {counts.generic}, "
           f"warten noch: {counts.backlog}")
     print(f"Digest: {path}")
-    notify(report, counts, path)
+    notify(report, counts, path, warnings)
     if counts.error:
         print(f"Fehler bei der Bewertung: {counts.error}", file=sys.stderr)
         return 1
@@ -122,6 +128,50 @@ def cmd_daily(cfg: Config, score: bool) -> int:
     return status
 
 
+def cmd_run(cfg: Config) -> int:
+    """The scheduled run. There is no console under pythonw, so problems end up in the log and a toast."""
+    status = 0
+
+    def daily() -> int:
+        nonlocal status
+        status = cmd_daily(cfg, score=True)
+        return status
+
+    conn = db.connect(cfg.db_path)
+    try:
+        result = scheduler.run_scheduled(conn, cfg, daily=daily,
+                                         network_ok=scheduler.network_ok, toast=toast, sleep=time.sleep)
+    except Exception as e:
+        log.exception("Scheduled run failed")
+        toast("JobSearch", f"Lauf fehlgeschlagen: {e}. Details in data/logs/jobsearch.log")
+        return 1
+    finally:
+        conn.close()
+    log.info("Scheduled run: %s", result)
+    return status
+
+
+def cmd_install_task(cfg: Config) -> int:
+    try:
+        scheduler.install_task(cfg.root)
+    except scheduler.TaskError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"Aufgabe '{scheduler.TASK_NAME}' angelegt: läuft 5 Minuten nach jeder Anmeldung, "
+          "der Daily run höchstens einmal am Tag.")
+    return 0
+
+
+def cmd_uninstall_task() -> int:
+    try:
+        scheduler.uninstall_task()
+    except scheduler.TaskError as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"Aufgabe '{scheduler.TASK_NAME}' entfernt.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="jobsearch")
     parser.add_argument("-v", "--verbose", action="store_true", help="Log auch auf der Konsole ausgeben")
@@ -132,6 +182,9 @@ def main(argv: list[str] | None = None) -> int:
     daily.add_argument("--no-score", action="store_true", help="Nur sammeln, nicht bewerten")
     score = sub.add_parser("score", help="Unbewertete Jobs bewerten, Digest schreiben")
     score.add_argument("--limit", type=int, help="Höchstens so viele Jobs (statt MAX_SCORED_PER_RUN)")
+    sub.add_parser("run", help="Geplanter Lauf: Daily run, falls heute noch keiner erfolgreich war")
+    sub.add_parser("install-task", help="Aufgabe in der Aufgabenplanung anlegen (bei Anmeldung)")
+    sub.add_parser("uninstall-task", help="Aufgabe aus der Aufgabenplanung entfernen")
     args = parser.parse_args(argv)
 
     try:
@@ -141,12 +194,25 @@ def main(argv: list[str] | None = None) -> int:
             cmd_init(cfg)
         elif args.command == "status":
             cmd_status(cfg)
-        elif args.command == "daily":
-            return cmd_daily(cfg, score=not args.no_score)
-        elif args.command == "score":
-            return cmd_score(cfg, db.connect(cfg.db_path), args.limit)
+        elif args.command in ("daily", "score"):
+            # The same lock as the scheduled run, so a manual run never overlaps it.
+            with scheduler.RunLock(cfg.data_dir / "run.lock") as held:
+                if not held:
+                    print("Ein anderer Lauf ist gerade aktiv, bitte später erneut versuchen.", file=sys.stderr)
+                    return 1
+                if args.command == "daily":
+                    return cmd_daily(cfg, score=not args.no_score)
+                return cmd_score(cfg, db.connect(cfg.db_path), args.limit)
+        elif args.command == "run":
+            return cmd_run(cfg)
+        elif args.command == "install-task":
+            return cmd_install_task(cfg)
+        elif args.command == "uninstall-task":
+            return cmd_uninstall_task()
     except ConfigError as e:
         print(f"Konfiguration: {e}", file=sys.stderr)
+        if args.command == "run":
+            toast("JobSearch", f"Konfiguration: {e}")
         return 2
     return 0
 

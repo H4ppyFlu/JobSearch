@@ -120,3 +120,10 @@ def test_no_toast_when_nothing_new(conn, cfg, tmp_path):
     counts = run_scoring(conn, cfg, ask=FakeAi(tier=1))
     _, report = digest.write_digest(conn, tmp_path, date.today(), counts)
     assert notify.message(report, counts) is None
+
+
+def test_collection_warnings_get_a_toast_even_without_new_jobs(conn, cfg, tmp_path):
+    counts = run_scoring(conn, cfg, ask=FakeAi())
+    _, report = digest.write_digest(conn, tmp_path, date.today(), counts)
+    assert notify.message(report, counts, ["Fehler beim Sammeln: Suche 'x'"]) == (
+        "JobSearch", "1 Warnung(en), Details im Digest")
