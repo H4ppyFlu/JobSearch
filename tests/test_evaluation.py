@@ -9,7 +9,7 @@ from jobsearch.cli import cmd_eval
 from jobsearch.eligibility import NOT_FULLY_REMOTE_REASON
 from jobsearch.config import ConfigError
 from jobsearch.evaluation import (Found, Period, changes, changes_report, describe, funnel_report, label, periods,
-                                  reason_kind, score_report, score_tables, stage_metrics, stage_report, term_metrics,
+                                  read_found, reason_kind, score_report, score_tables, stage_metrics, stage_report, term_metrics,
                                   trace)
 from jobsearch.scoring import AI_NOT_REMOTE_REASON
 
@@ -271,3 +271,9 @@ def test_funnel_with_an_empty_or_missing_file(conn, tmp_path):
     assert "Noch keine Fremdfunde" in funnel_report(conn, write_found(tmp_path / "found.csv"))[0]
     with pytest.raises(ConfigError):
         funnel_report(conn, tmp_path / "missing.csv")
+
+
+def test_a_found_file_saved_with_bom_keeps_its_company_column(tmp_path):
+    path = write_found(tmp_path / "found.csv", ("Muster GmbH", "Planer", "", ""))
+    path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8-sig")
+    assert read_found(path) == [Found("Muster GmbH", "Planer", "", "")]

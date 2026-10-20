@@ -35,3 +35,11 @@ def targets(tmp_path):
 def test_match(targets, company, expected):
     found = match_target_company(company, targets)
     assert (found.name if found else None) == expected
+
+
+def test_a_list_saved_with_bom_keeps_its_name_column(tmp_path):
+    # Spreadsheet programs often save CSV with a BOM, which would otherwise end up in the first column name
+    path = tmp_path / "companies.csv"
+    path.write_text("name,aliases,locations,career_url,ats_type,render_mode\nNORDTEC AG,,Musterstadt,,,\n",
+                    encoding="utf-8-sig")
+    assert [t.name for t in load_target_companies(path)] == ["NORDTEC AG"]

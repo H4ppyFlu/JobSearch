@@ -37,7 +37,8 @@ def load_target_companies(path: Path) -> list[TargetCompany]:
     if not path.exists():
         raise ConfigError(f"{path} is missing. Run 'jobsearch init' and fill it in.")
     companies = []
-    with path.open(encoding="utf-8", newline="") as f:
+    # utf-8-sig: a list saved from a spreadsheet often starts with a BOM, which would hide the "name" column
+    with path.open(encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             name = (row.get("name") or "").strip()
             if not name:

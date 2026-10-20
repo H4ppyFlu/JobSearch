@@ -85,3 +85,11 @@ def test_recheck_replaces_pages_that_did_not_work(companies):
     by_name = {r["name"]: r for r in rows(companies)}
     assert by_name["Muster Industrie GmbH"]["career_url"] == "https://muster.example/karriere"
     assert by_name["Muster Industrie GmbH"]["ats_type"] == "personio"
+
+
+def test_a_list_saved_with_bom_is_read_and_keeps_its_bom(companies):
+    companies.write_text(CSV, encoding="utf-8-sig")
+    result = run_setup(companies, model="sonnet", ask=SetupAi())
+    assert result.filled == 2
+    raw = companies.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbfname,") and raw.count(b"\xef\xbb\xbf") == 1

@@ -32,7 +32,7 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
   - The scan uses `--no-renames`, so a renamed file counts as fully added and is scanned again. Safer, but a moved file with an accepted term needs the allowlist.
   - The `PROFILE_PATH` value is matched with both slash directions and in Git Bash form (`/c/...`), and its folder too.
   - From the review: `git commit -m` keeps lines starting with `#`, so the message check scans them too (only the scissors line of `git commit -v` ends the scan). Git runs in the hook's own working directory, not in `JOBSEARCH_HOME`, so a worktree checks its own index. File names come from `git diff --name-only`, which also lists empty and binary files. Comment lines in `private.example/` no longer count as generic values. `companies.csv` is read as `utf-8-sig`.
-  - Open: `companies.load_target_companies` still reads `companies.csv` as plain `utf-8`, so a list saved with a BOM loses its `name` column in the Career scan too.
+  - The same BOM problem hit the Career scan, the career setup and `found_elsewhere.csv`: a CSV saved from a spreadsheet lost its first column name. All three now read past a BOM, and the setup writes `companies.csv` back with the BOM it found.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)

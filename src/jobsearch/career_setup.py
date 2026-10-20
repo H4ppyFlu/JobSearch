@@ -83,7 +83,9 @@ def run_setup(path: Path, *, model: str, ask=ai.ask, recheck: dict[str, str] | N
     entries are replaced; all other entries are only filled where empty."""
     recheck = recheck or {}
     text = path.read_text(encoding="utf-8")
-    reader = csv.DictReader(io.StringIO(text, newline=""))
+    # A list saved from a spreadsheet often starts with a BOM; read past it and write it back the same way
+    encoding = "utf-8-sig" if text.startswith("﻿") else "utf-8"
+    reader = csv.DictReader(io.StringIO(text.removeprefix("﻿"), newline=""))
     fieldnames = list(reader.fieldnames or [])
     for name in FIELDS:
         if name not in fieldnames:
@@ -119,13 +121,13 @@ def run_setup(path: Path, *, model: str, ask=ai.ask, recheck: dict[str, str] | N
                 if row["name"] in recheck or not (row.get(name) or "").strip():
                     row[name] = info[name]
             result.filled += 1
-        _write(path, fieldnames, rows)  # after every batch, so a later failure keeps what was found
+        _write(path, fieldnames, rows, encoding)  # after every batch, so a later failure keeps what was found
     return result
 
 
-def _write(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
+def _write(path: Path, fieldnames: list[str], rows: list[dict], encoding: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as f:
+    with tmp.open("w", encoding=encoding, newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)

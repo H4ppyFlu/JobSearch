@@ -397,7 +397,7 @@ class Trace:
 def read_found(path: Path) -> list[Found]:
     if not path.exists():
         raise ConfigError(f"{path} fehlt. 'jobsearch init' legt die Datei an.")
-    with path.open(encoding="utf-8", newline="") as f:
+    with path.open(encoding="utf-8-sig", newline="") as f:  # a spreadsheet may have added a BOM
         rows = [{k: (v or "").strip() for k, v in row.items() if k} for row in csv.DictReader(f)]
     return [Found(r.get("company", ""), r.get("title", ""), r.get("url", ""), r.get("found_on", ""))
             for r in rows if r.get("title") or r.get("url")]
