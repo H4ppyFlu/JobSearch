@@ -79,14 +79,14 @@ def test_remote_candidates_are_settled_by_the_ai(conn, cfg):
 
 
 def test_missing_profile_is_recorded_like_an_ai_failure(conn, cfg, tmp_path):
-    add_job(conn, "Projektingenieur")
+    add_job(conn, "Sachbearbeiter")
     counts = run_scoring(conn, dataclasses.replace(cfg, profile_path=tmp_path / "weg.md"), ask=FakeAi())
     assert "Profil nicht gefunden" in counts.error and counts.backlog == 1
     assert conn.execute("SELECT ok FROM runs").fetchone()[0] == 0
 
 
 def test_ai_failure_keeps_jobs_unscored_and_is_recorded(conn, cfg):
-    add_job(conn, "Projektingenieur")
+    add_job(conn, "Sachbearbeiter")
     counts = run_scoring(conn, cfg, ask=FakeAi(fail="Claude-Kontingent erschöpft"))
     assert counts.error == "Claude-Kontingent erschöpft" and counts.backlog == 1
     assert conn.execute("SELECT count(*) FROM fit_scores").fetchone()[0] == 0
@@ -130,6 +130,6 @@ def test_collection_warnings_get_a_toast_even_without_new_jobs(conn, cfg, tmp_pa
 
 
 def test_each_fit_score_stores_the_prompt_version(conn, cfg):
-    add_job(conn, "Projektingenieur")
+    add_job(conn, "Sachbearbeiter")
     run_scoring(conn, cfg, ask=FakeAi())
     assert conn.execute("SELECT prompt_hash FROM fit_scores").fetchone()[0] == prompts.version("scoring.md")

@@ -26,12 +26,12 @@ def add_run(conn, started_at, settings, kind="daily"):
 
 
 def test_describe_names_each_changed_setting():
-    new = {**BASE, "search_terms": ["Planer", "Bauleiter"], "prompt_scoring": "bbb", "radius_km": 40,
+    new = {**BASE, "search_terms": ["Planer", "Disponent"], "prompt_scoring": "bbb", "radius_km": 40,
            "alert_mail": False, "profile": None}
     assert describe(BASE, new) == [
         "Prompt Bewertung: geändert",
         "Profil: fehlt",
-        "Suchbegriffe: + Bauleiter, − Projektleiter",
+        "Suchbegriffe: + Disponent, − Projektleiter",
         "Alert-Mail: an → aus",
         "Radius (km): 30 → 40",
     ]
@@ -125,7 +125,7 @@ def test_reason_kinds(reason, kind):
 
 def test_stage_metrics_count_each_stage_within_the_period(conn):
     a = add_job(conn, "Planer", first_seen="2026-10-15")
-    b = add_job(conn, "Bauleiter", first_seen="2026-10-15")
+    b = add_job(conn, "Disponent", first_seen="2026-10-15")
     add_job(conn, "Unscored", first_seen="2026-10-15")
     add_job(conn, "Weit weg", eligibility="ineligible", reason="Entfernung 80 km", first_seen="2026-10-15")
     add_job(conn, "Praktikum", eligibility="ineligible", reason="Ausschlussliste: Praktikum", first_seen="2026-10-15")
