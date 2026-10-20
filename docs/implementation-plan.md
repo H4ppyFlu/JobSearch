@@ -17,6 +17,7 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
 - **All phases built.** Still open: the Phase 8 URL check above.
 - **Eval Part 1 done** (2026-10-20, `docs/issues/eval.md`). Each Daily run stores a settings snapshot and each Fit score its prompt hash. `eval --changes` on the live database showed the start of recording after one collect-only run. Fit scores from before have no prompt hash; `git log` of `scoring.md` dates them.
 - **Eval Part 2 done** (2026-10-20). `jobsearch eval` shows metrics per stage and per Search term, for a period or split at a date. First findings on the live database: most ineligible Jobs come from the nationwide query and are dropped as not fully remote; derived terms that differ only in word order find almost the same Jobs, so their "nur hier" count is near zero; the share of Low-confidence scores rose once alert mails and career pages came in, probably because of their shorter texts (not checked yet).
+- **Eval Part 3 done** (2026-10-20). `jobsearch eval --scores` puts each tier against the Job status, with precision of ★★★, positives hidden in ★ and the labeled share per tier, grouped by model, Profile, prompt version or month. On the live database only a small share of scored Jobs has a label yet, almost all of them negative and in ★, so the numbers say little so far; the report says so itself.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)

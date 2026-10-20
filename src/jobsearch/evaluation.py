@@ -4,6 +4,8 @@
   and the dates where the snapshot differs are the split points for comparisons.
 - Stage metrics (`jobsearch eval`): what each stage let through, per period. A period holds the
   Jobs and Postings first seen in it, so `--split DATE` compares the weeks before and after a change.
+- Fit score against Job status (`jobsearch eval --scores`): the candidate's own decisions as labels,
+  per tier, optionally grouped by model, Profile, prompt version or month.
 """
 
 from __future__ import annotations
@@ -281,4 +283,74 @@ def stage_report(conn: sqlite3.Connection, chosen: list[Period]) -> list[str]:
         lines += _table(["Jobs", "nur hier", "eligible", "★★★", "★★", "★", "positiv"],
                         [(t.term, [str(t.jobs), str(t.only_here), str(t.eligible), str(t.tiers[3]),
                                         str(t.tiers[2]), str(t.tiers[1]), str(t.positive)]) for t in terms])
+    return lines
+
+
+# --- Fit score against Job status ----------------------------------------------------------------
+
+GROUPS = ("model", "profile", "prompt", "month")
+FEW_LABELS = 30  # below this, a difference of one or two Jobs is noise
+
+
+def label(status: str) -> str | None:
+    """The candidate's decision as a label: positive, negative, or None while it is still open."""
+    if status in POSITIVE:
+        return "positive"
+    return "negative" if status == "not_interesting" else None
+
+
+def _group(row: sqlite3.Row, by: str | None) -> str:
+    if by == "model":
+        return row["model"]
+    if by == "profile":
+        return f"Profil {row['profile_hash'][:8]}"
+    if by == "prompt":
+        return f"Prompt {row['prompt_hash'][:8]}" if row["prompt_hash"] else "Prompt vor der Aufzeichnung"
+    if by == "month":
+        return row["scored_at"][:7]
+    return "alle"
+
+
+def score_tables(conn: sqlite3.Connection, period: Period, by: str | None = None) -> dict[str, Counter]:
+    """Per group, a count per (tier, label) for the scored Jobs first seen in the period."""
+    cond, params = period.where("j.first_seen")
+    rows = conn.execute(
+        f"""SELECT s.tier, j.status, s.model, s.profile_hash, s.prompt_hash, s.scored_at
+            FROM fit_scores s JOIN jobs j ON j.id = s.job_id WHERE {cond} ORDER BY s.scored_at""", params)
+    tables: dict[str, Counter] = {}
+    for r in rows:
+        tables.setdefault(_group(r, by), Counter())[(r["tier"], label(r["status"]))] += 1
+    return tables
+
+
+def _percent(n: int, total: int) -> str:
+    return f"{round(100 * n / total)} % ({n} von {total})" if total else "–"
+
+
+def score_report(conn: sqlite3.Connection, chosen: list[Period], by: str | None = None) -> list[str]:
+    lines = []
+    for period in chosen:
+        for group, t in score_tables(conn, period, by).items():
+            title = ", ".join(x for x in (period.label, group if by else None) if x)
+            rows = [(STARS[tier], [str(t[(tier, "positive")]), str(t[(tier, "negative")]), str(t[(tier, None)])])
+                    for tier in (3, 2, 1)]
+            positives = sum(t[(tier, "positive")] for tier in STARS)
+            labeled = positives + sum(t[(tier, "negative")] for tier in STARS)
+            if lines:
+                lines.append("")
+            lines.append(f"Fit score gegen Job status ({title}):")
+            lines += _table(["positiv", "negativ", "ohne Label"], rows)
+            top_labeled = t[(3, "positive")] + t[(3, "negative")]
+            lines.append(f"Treffsicherheit ★★★: {_percent(t[(3, 'positive')], top_labeled)}")
+            lines.append(f"Übersehen in ★: {t[(1, 'positive')]} von {positives} positiven")
+            per_tier = []
+            for tier in (3, 2, 1):
+                in_tier = t[(tier, "positive")] + t[(tier, "negative")]
+                per_tier.append(f"{STARS[tier]} {_percent(in_tier, in_tier + t[(tier, None)])}")
+            lines.append("Mit Label je Tier: " + ", ".join(per_tier))
+            lines.append(f"Labels: {labeled} von {sum(t.values())} bewerteten Jobs")
+            if labeled < FEW_LABELS:
+                lines.append("Wenige Labels: Unterschiede von ein, zwei Jobs sind hier Zufall.")
+    if not lines:
+        lines = ["Im Zeitraum gibt es keine bewerteten Jobs."]
     return lines

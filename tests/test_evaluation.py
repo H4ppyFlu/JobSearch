@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from datetime import date
 
 import pytest
@@ -6,8 +7,8 @@ import pytest
 from jobsearch import db
 from jobsearch.cli import cmd_eval
 from jobsearch.eligibility import NOT_FULLY_REMOTE_REASON
-from jobsearch.evaluation import (Period, changes, changes_report, describe, periods, reason_kind, stage_metrics,
-                                  stage_report, term_metrics)
+from jobsearch.evaluation import (Period, changes, changes_report, describe, label, periods, reason_kind,
+                                  score_report, score_tables, stage_metrics, stage_report, term_metrics)
 from jobsearch.scoring import AI_NOT_REMOTE_REASON
 
 from .conftest import add_job
@@ -173,3 +174,46 @@ def test_eval_command_rejects_a_split_outside_the_period(cfg, capsys):
     assert cmd_eval(cfg, False, since=date(2026, 10, 15), split=date(2026, 10, 1)) == 2
     assert "liegt nicht im Zeitraum" in capsys.readouterr().err
     assert cmd_eval(cfg, False, until=date(2026, 10, 15)) == 0
+
+
+def scored_job(conn, title, tier, status="new", prompt_hash=None, scored_at="2026-10-16T09:00:00",
+               first_seen="2026-10-15"):
+    job = add_job(conn, title, first_seen=first_seen)
+    with conn:
+        conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job))
+        conn.execute("""INSERT INTO fit_scores (job_id, tier, reasoning, profile_hash, prompt_hash, model, scored_at)
+                        VALUES (?, ?, 'Passt.', 'ppp', ?, 'claude-test', ?)""", (job, tier, prompt_hash, scored_at))
+    return job
+
+
+@pytest.mark.parametrize("status, expected", [
+    ("interesting", "positive"), ("applied", "positive"), ("rejected", "positive"),
+    ("not_interesting", "negative"), ("new", None),
+])
+def test_job_status_as_label(status, expected):
+    assert label(status) == expected
+
+
+def test_score_table_counts_tier_against_label(conn):
+    scored_job(conn, "A", 3, "applied")
+    scored_job(conn, "B", 3, "not_interesting")
+    scored_job(conn, "C", 1, "interesting")
+    scored_job(conn, "D", 1)
+    assert score_tables(conn, Period("gesamt")) == {
+        "alle": Counter({(3, "positive"): 1, (3, "negative"): 1, (1, "positive"): 1, (1, None): 1})}
+    report = score_report(conn, [Period("gesamt")])
+    assert "Treffsicherheit ★★★: 50 % (1 von 2)" in report
+    assert "Übersehen in ★: 1 von 2 positiven" in report
+    assert "Labels: 3 von 4 bewerteten Jobs" in report
+    assert any(line.startswith("Wenige Labels") for line in report)
+
+
+def test_scores_group_by_prompt_version_and_month(conn):
+    scored_job(conn, "Alt", 2)
+    scored_job(conn, "Neu", 2, prompt_hash="abcdef0123456789", scored_at="2026-11-02T09:00:00")
+    assert set(score_tables(conn, Period("gesamt"), "prompt")) == {"Prompt vor der Aufzeichnung", "Prompt abcdef01"}
+    assert set(score_tables(conn, Period("gesamt"), "month")) == {"2026-10", "2026-11"}
+
+
+def test_score_report_without_scores_says_so(conn):
+    assert score_report(conn, [Period("gesamt")]) == ["Im Zeitraum gibt es keine bewerteten Jobs."]

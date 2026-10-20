@@ -95,6 +95,7 @@ python -m venv .venv
 .venv\Scripts\python -m jobsearch career-setup [--recheck]  # find career pages with web search (one time)
 .venv\Scripts\python -m jobsearch career-scan  # check career pages now (otherwise weekly inside daily)
 .venv\Scripts\python -m jobsearch eval [--since D] [--until D] [--split D]  # metrics per stage and Search term
+.venv\Scripts\python -m jobsearch eval --scores [--by model|profile|prompt|month]  # Fit score against Job status
 .venv\Scripts\python -m jobsearch eval --changes  # when settings changed (prompt, Profile, Search terms, ...)
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again

@@ -274,7 +274,7 @@ def cmd_career_setup(cfg: Config, recheck: bool) -> int:
 
 
 def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date | None = None,
-             split: date | None = None) -> int:
+             split: date | None = None, scores: bool = False, by: str | None = None) -> int:
     conn = db.connect(cfg.db_path)
     if changes:
         print("\n".join(evaluation.changes_report(conn)))
@@ -286,7 +286,10 @@ def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date 
     except ValueError as e:
         print(e, file=sys.stderr)
         return 2
-    print("\n".join(evaluation.stage_report(conn, chosen)))
+    if scores or by:
+        print("\n".join(evaluation.score_report(conn, chosen, by)))
+    else:
+        print("\n".join(evaluation.stage_report(conn, chosen)))
     return 0
 
 
@@ -337,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--until", type=date.fromisoformat, help="Letzter Tag (JJJJ-MM-TT)")
     evaluate.add_argument("--split", type=date.fromisoformat,
                           help="Vorher und nachher vergleichen, z. B. am Tag einer Änderung (JJJJ-MM-TT)")
+    evaluate.add_argument("--scores", action="store_true", help="Fit score gegen Job status")
+    evaluate.add_argument("--by", choices=evaluation.GROUPS, help="Fit scores gruppieren (schließt --scores ein)")
     args = parser.parse_args(argv)
 
     try:
@@ -368,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "dashboard":
             return cmd_dashboard(cfg, args.port, not args.no_browser)
         elif args.command == "eval":
-            return cmd_eval(cfg, args.changes, args.since, args.until, args.split)
+            return cmd_eval(cfg, args.changes, args.since, args.until, args.split, args.scores, args.by)
     except ConfigError as e:
         print(f"Konfiguration: {e}", file=sys.stderr)
         if args.command == "run":
