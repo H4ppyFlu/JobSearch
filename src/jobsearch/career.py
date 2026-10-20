@@ -161,6 +161,7 @@ class ScanCounts:
     rendered: int = 0  # pages that needed a browser
     places_unknown: int = 0
     description_failures: int = 0
+    ungrounded: int = 0  # extracted items dropped because the page text does not show them
     warnings: list[str] = field(default_factory=list)  # pages failing or empty REPORT_AFTER times in a row
     error: str | None = None  # the AI step failed; those pages are tried again next time
 
@@ -234,16 +235,35 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
-def grounded(item: dict, text: str) -> str | None:
+def ungrounded_reason(item: dict, text: str) -> str | None:
     """Why an extracted item is not backed by the page text the AI saw, or None when it is.
-    Titles are often split over inline elements, so any whitespace counts as one space. A link must
-    appear whole, as page_text() writes it, not as the prefix of a longer one."""
-    if _normalize(item["title"]) not in _normalize(text):
+    The title is looked for in the visible text without the <links>, where any slug would match;
+    titles are often split over inline elements, so any whitespace counts as one space. A link must
+    appear whole and closed, as page_text() writes it: not the prefix of a longer one, and not a
+    link that MAX_PAGE_CHARS cut off at the end of the text."""
+    if _normalize(item["title"]) not in _normalize(re.sub(r"<[^<>\s]*>", " ", text)):
         return "Titel nicht im Seitentext"
     url = (item.get("url") or "").strip().rstrip("/")
-    if url and not re.search(r"(?:^|[\s<])" + re.escape(url) + r"/?(?=$|[\s>])", text):
+    if url and not re.search(r"(?:^|[\s<])" + re.escape(url) + r"/?(?=[\s>])", text):
         return "Link nicht im Seitentext"
     return None
+
+
+def _grounded_items(page: _Page, items: list[dict], counts: ScanCounts) -> list[dict]:
+    """The page text is untrusted and the AI can invent: keep only what the page itself shows.
+    Each drop is logged, so a false one can be looked up in the log."""
+    kept = []
+    for item in items:
+        if not item["title"].strip():
+            continue
+        reason = ungrounded_reason(item, page.text)
+        if reason is None:
+            kept.append(item)
+            continue
+        counts.ungrounded += 1
+        log.info("Dropped from %s: %s (title %r, url %r)", page.company.name, reason, item["title"],
+                 item.get("url") or "")
+    return kept
 
 
 def build_prompt(pages: list[_Page]) -> str:
@@ -468,9 +488,7 @@ def run_career_scan(conn: sqlite3.Connection, cfg: Config, companies: list[Targe
             counts.extracted += len(batch)
             found = {p["page_id"]: p["postings"] for p in answer.data["pages"]}
             for i, page in enumerate(batch):
-                # The page text is untrusted and the AI can invent: keep only what the page itself shows
-                items = [item for item in found[i] if item["title"].strip() and grounded(item, page.text) is None]
-                postings = [_posting(page.company, item) for item in items]
+                postings = [_posting(page.company, item) for item in _grounded_items(page, found[i], counts)]
                 _store(conn, cfg, companies, rules, postings, gazetteer, index, today, counts)
                 with conn:
                     _warn(_record(conn, page.company, day, content_hash=page.hash, found=len(postings)), counts)

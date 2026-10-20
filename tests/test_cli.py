@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from jobsearch.cli import cmd_daily
+from jobsearch.career import ScanCounts
+from jobsearch.cli import career_summary, cmd_daily
 from jobsearch.config import ConfigError
 from tests.conftest import TERMS, TermsAi
 
@@ -60,3 +61,10 @@ def test_failed_first_derivation_without_manual_terms_names_the_ai_error(cfg):
     (cfg.private_dir / "search_terms.txt").write_text("# leer\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="Claude-Kontingent erschöpft"):
         cmd_daily(cfg, score=False, career="off", client=RecordingClient(), ask=TermsAi(fail="Claude-Kontingent erschöpft"))
+
+
+def test_career_summary_names_dropped_postings_only_when_there_are_some():
+    counts = ScanCounts(pages=3, unchanged=1, extracted=2, new_jobs=1)
+    assert "verworfen" not in career_summary(counts)
+    counts.ungrounded = 2
+    assert career_summary(counts).endswith(", verworfen (nicht im Seitentext): 2")

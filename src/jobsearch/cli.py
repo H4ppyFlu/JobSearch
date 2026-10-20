@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from logging.handlers import RotatingFileHandler
 
 from . import ai, config, db, evaluation, geo, guard, scheduler
-from .career import run_career_scan, scan_due
+from .career import ScanCounts, run_career_scan, scan_due
 from .companies import load_target_companies
 from .config import Config, ConfigError
 from .daily import run_daily
@@ -128,6 +128,14 @@ def cmd_score(cfg: Config, conn, limit: int | None = None, warnings: list[str] =
     return 0
 
 
+def career_summary(counts: ScanCounts) -> str:
+    line = (f"Karriereseiten: {counts.pages} geprüft, {counts.unchanged} unverändert, {counts.extracted} ausgelesen, "
+            f"{counts.feeds} per Feed, {counts.new_jobs} neue Jobs")
+    if counts.ungrounded:
+        line += f", verworfen (nicht im Seitentext): {counts.ungrounded}"
+    return line
+
+
 def career_scan(cfg: Config, conn, rules: Rules, targets) -> list[str]:
     """Run the Career scan, print a summary, return warnings for the Digest."""
     gazetteer = geo.Gazetteer.load(cfg.geo_path, (cfg.home_lat, cfg.home_lon))
@@ -136,8 +144,7 @@ def career_scan(cfg: Config, conn, rules: Rules, targets) -> list[str]:
     except Exception as e:  # the Daily run's own Jobs must still be scored and the Digest written
         log.exception("Career scan failed")
         return [f"Karriereseiten-Scan abgebrochen: {e}"]
-    print(f"Karriereseiten: {counts.pages} geprüft, {counts.unchanged} unverändert, {counts.extracted} ausgelesen, "
-          f"{counts.feeds} per Feed, {counts.new_jobs} neue Jobs")
+    print(career_summary(counts))
     warnings = list(counts.warnings)
     if counts.error:
         warnings.append(f"Karriereseiten nicht ausgelesen: {counts.error}")

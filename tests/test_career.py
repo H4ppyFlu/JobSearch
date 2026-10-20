@@ -1,10 +1,11 @@
 import json
+import logging
 from datetime import date
 
 import pytest
 
 from jobsearch import ai
-from jobsearch.career import FetchError, grounded, page_text, run_career_scan, scan_due
+from jobsearch.career import FetchError, page_text, run_career_scan, scan_due, ungrounded_reason
 from jobsearch.companies import TargetCompany, normalize_company
 from jobsearch.eligibility import Rules
 
@@ -250,21 +251,63 @@ GROUNDING_TEXT = page_text(PAGE, "https://muster.example/karriere/").text
     ({"title": "Landschaftsgärtner (m/w/d)", "url": "https://muster.example/jobs/2"}, "Link"),
     ({"title": "Landschaftsgärtner (m/w/d)", "url": "https://muster.example/jobs"}, "Link"),  # only a prefix
 ])
-def test_grounded(item, reason):
-    result = grounded(item, GROUNDING_TEXT)
+def test_ungrounded_reason(item, reason):
+    result = ungrounded_reason(item, GROUNDING_TEXT)
     assert (result is None) if reason is None else (reason in result)
 
 
 def test_a_title_split_over_lines_is_grounded():
     text = page_text("<h3>Leitung<br>Technik (m/w/d)</h3>", "https://muster.example/").text
     assert "\n" in text
-    assert grounded({"title": "Leitung Technik (m/w/d)", "url": ""}, text) is None
+    assert ungrounded_reason({"title": "Leitung Technik (m/w/d)", "url": ""}, text) is None
+
+
+def test_a_page_link_with_a_trailing_slash_matches_one_without():
+    text = "Konstrukteur Maschinenbau <https://jobs.example.org/456/>"
+    assert ungrounded_reason({"title": "Konstrukteur Maschinenbau", "url": "https://jobs.example.org/456"}, text) is None
+
+
+def test_a_link_cut_off_at_the_end_of_the_page_text_is_not_grounded():
+    # MAX_PAGE_CHARS can cut the text inside a link; the AI could return the broken stub
+    text = "Konstrukteur Maschinenbau <https://jobs.example.org/45"
+    assert "Link" in ungrounded_reason({"title": "Konstrukteur Maschinenbau", "url": "https://jobs.example.org/45"},
+                                       text)
+
+
+def test_a_title_that_only_appears_inside_a_link_is_not_grounded():
+    text = "Offene Stellen <https://muster.example/karriere/projekte>"
+    assert "Titel" in ungrounded_reason({"title": "Projekte", "url": ""}, text)
+
+
+INVENTED = [dict(JOB, title="Konditor (m/w/d)", url=""),
+            dict(JOB, title="Konstrukteur Maschinenbau", url="https://jobs.example.org/999")]
 
 
 def test_invented_postings_are_dropped_and_grounded_ones_kept(conn, cfg):
-    invented_title = dict(JOB, title="Konditor (m/w/d)", url="")
-    invented_url = dict(JOB, title="Konstrukteur Maschinenbau", url="https://jobs.example.org/999")
+    invented_title, invented_url = INVENTED
     fetch = FakeFetch({"https://muster.example/karriere": PAGE, "https://muster.example/jobs/1": "<p>Text</p>"})
     counts = scan(conn, cfg, TARGETS, fetch, ExtractAi({"Muster Industrie GmbH": [invented_title, JOB, invented_url]}))
     assert counts.new_jobs == 1
     assert [r[0] for r in conn.execute("SELECT title FROM jobs")] == ["Landschaftsgärtner (m/w/d)"]
+
+
+def test_dropped_postings_are_counted_and_logged(conn, cfg, caplog):
+    fetch = FakeFetch({"https://muster.example/karriere": PAGE, "https://muster.example/jobs/1": "<p>Text</p>"})
+    with caplog.at_level(logging.INFO, logger="jobsearch.career"):
+        counts = scan(conn, cfg, TARGETS, fetch, ExtractAi({"Muster Industrie GmbH": INVENTED + [JOB]}))
+    assert counts.ungrounded == 2
+    drops = [r.getMessage() for r in caplog.records if "nicht im Seitentext" in r.getMessage()]
+    assert len(drops) == 2
+    assert all("Muster Industrie GmbH" in d for d in drops)
+    assert "Konditor (m/w/d)" in drops[0] and "https://jobs.example.org/999" in drops[1]
+    run = json.loads(conn.execute("SELECT counts_json FROM runs WHERE kind = 'career_scan'").fetchone()[0])
+    assert run["ungrounded"] == 2
+
+
+def test_a_page_whose_postings_are_all_dropped_is_reported_after_two_scans(conn, cfg):
+    first = FakeFetch({"https://muster.example/karriere": PAGE})
+    assert scan(conn, cfg, TARGETS, first, ExtractAi({"Muster Industrie GmbH": INVENTED})).warnings == []
+    second = FakeFetch({"https://muster.example/karriere": PAGE.replace("Offene", "Aktuelle")})
+    warnings = scan(conn, cfg, TARGETS, second, ExtractAi({"Muster Industrie GmbH": INVENTED}),
+                    day=date(2026, 10, 22)).warnings
+    assert len(warnings) == 1 and "Muster Industrie GmbH" in warnings[0]

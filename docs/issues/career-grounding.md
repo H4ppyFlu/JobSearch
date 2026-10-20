@@ -1,6 +1,6 @@
 # Issue: Grounding check for the Career scan extraction
 
-Status: in progress on branch `implement-career-grounding`. Part 1 built.
+Status: Parts 1 and 2 done on branch `implement-career-grounding`; personal-data check and merge into `main` pending.
 
 ## Goal
 
