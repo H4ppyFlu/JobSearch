@@ -8,7 +8,7 @@ import logging
 import shutil
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from logging.handlers import RotatingFileHandler
 
 from . import ai, config, db, evaluation, geo, scheduler
@@ -273,11 +273,20 @@ def cmd_career_setup(cfg: Config, recheck: bool) -> int:
     return 0
 
 
-def cmd_eval(cfg: Config, changes: bool) -> int:
-    if not changes:
-        print("Bisher gibt es nur 'jobsearch eval --changes'.", file=sys.stderr)
+def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date | None = None,
+             split: date | None = None) -> int:
+    conn = db.connect(cfg.db_path)
+    if changes:
+        print("\n".join(evaluation.changes_report(conn)))
+        return 0
+    try:
+        # --until names the last day, a Period ends the day after
+        chosen = evaluation.periods(since and since.isoformat(), until and (until + timedelta(days=1)).isoformat(),
+                                    split and split.isoformat())
+    except ValueError as e:
+        print(e, file=sys.stderr)
         return 2
-    print("\n".join(evaluation.changes_report(db.connect(cfg.db_path))))
+    print("\n".join(evaluation.stage_report(conn, chosen)))
     return 0
 
 
@@ -324,6 +333,10 @@ def main(argv: list[str] | None = None) -> int:
     dashboard.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
     evaluate = sub.add_parser("eval", help="Auswertung der gespeicherten Läufe (ohne KI)")
     evaluate.add_argument("--changes", action="store_true", help="Wann sich die Einstellungen geändert haben")
+    evaluate.add_argument("--since", type=date.fromisoformat, help="Erster Tag (JJJJ-MM-TT)")
+    evaluate.add_argument("--until", type=date.fromisoformat, help="Letzter Tag (JJJJ-MM-TT)")
+    evaluate.add_argument("--split", type=date.fromisoformat,
+                          help="Vorher und nachher vergleichen, z. B. am Tag einer Änderung (JJJJ-MM-TT)")
     args = parser.parse_args(argv)
 
     try:
@@ -355,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "dashboard":
             return cmd_dashboard(cfg, args.port, not args.no_browser)
         elif args.command == "eval":
-            return cmd_eval(cfg, args.changes)
+            return cmd_eval(cfg, args.changes, args.since, args.until, args.split)
     except ConfigError as e:
         print(f"Konfiguration: {e}", file=sys.stderr)
         if args.command == "run":

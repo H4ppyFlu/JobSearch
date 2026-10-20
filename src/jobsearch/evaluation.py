@@ -1,15 +1,21 @@
 """The eval: a read-only look at what the runs stored. No AI call, and it works retroactively.
 
-So far it shows when the settings changed (`jobsearch eval --changes`). Each Daily run stores a
-snapshot of what was in effect, and the dates where the snapshot differs are the split points
-for comparing results before and after a change.
+- Changes (`jobsearch eval --changes`): each Daily run stores a snapshot of what was in effect,
+  and the dates where the snapshot differs are the split points for comparisons.
+- Stage metrics (`jobsearch eval`): what each stage let through, per period. A period holds the
+  Jobs and Postings first seen in it, so `--split DATE` compares the weeks before and after a change.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
+
+from .eligibility import NOT_FULLY_REMOTE_REASON
+from .scoring import AI_NOT_REMOTE_REASON
 
 LABELS = {
     "model_scoring": "Modell Bewertung",
@@ -32,7 +38,39 @@ LABELS = {
 # Stored as hashes, so only "changed" can be said about them.
 HASHED = {"prompt_scoring", "prompt_career_extract", "prompt_search_terms", "profile", "exclusions",
           "target_companies"}
+# Job status values that mean the candidate wanted the Job. Rejected is the company's decision.
+POSITIVE = ("interesting", "applied", "rejected")
+SOURCES = {"bundesagentur": "Bundesagentur", "indeed": "Alert-Mail", "career_page": "Karriereseiten"}
+STARS = {3: "★★★", 2: "★★", 1: "★"}
 
+
+@dataclass(frozen=True)
+class Period:
+    label: str
+    since: str | None = None  # first day, inclusive (YYYY-MM-DD)
+    until: str | None = None  # day after the last one, exclusive
+
+    def where(self, column: str) -> tuple[str, list[str]]:
+        """A SQL condition on a date or timestamp column, and its parameters."""
+        parts, params = [], []
+        if self.since:
+            parts.append(f"substr({column}, 1, 10) >= ?")
+            params.append(self.since)
+        if self.until:
+            parts.append(f"substr({column}, 1, 10) < ?")
+            params.append(self.until)
+        return " AND ".join(parts) or "1", params
+
+
+def periods(since: str | None, until: str | None, split: str | None) -> list[Period]:
+    if not split:
+        return [Period("gesamt", since, until)]
+    if (since and split <= since) or (until and split >= until):
+        raise ValueError(f"--split {split} liegt nicht im Zeitraum")
+    return [Period(f"vor {split}", since, split), Period(f"ab {split}", split, until)]
+
+
+# --- Changes -------------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Change:
@@ -40,9 +78,10 @@ class Change:
     lines: list[str]
 
 
-def snapshots(conn: sqlite3.Connection) -> list[tuple[str, dict]]:
-    rows = conn.execute("""SELECT started_at, settings_json FROM runs
-                           WHERE kind = 'daily' AND settings_json IS NOT NULL ORDER BY id""")
+def snapshots(conn: sqlite3.Connection, period: Period = Period("gesamt")) -> list[tuple[str, dict]]:
+    cond, params = period.where("started_at")
+    rows = conn.execute(f"""SELECT started_at, settings_json FROM runs
+                            WHERE kind = 'daily' AND settings_json IS NOT NULL AND {cond} ORDER BY id""", params)
     return [(r["started_at"], json.loads(r["settings_json"])) for r in rows]
 
 
@@ -104,4 +143,142 @@ def changes_report(conn: sqlite3.Connection) -> list[str]:
     if unmarked:
         lines.append(f"Fit scores ohne Prompt-Version: {unmarked}. Sie stammen von vor der Aufzeichnung, "
                      "ihre Version zeigt 'git log' von scoring.md im Vergleich mit dem Bewertungsdatum.")
+    return lines
+
+
+# --- Stage metrics -------------------------------------------------------------------------------
+
+@dataclass
+class StageMetrics:
+    daily_runs: int = 0
+    postings: dict[str, int] = field(default_factory=dict)  # new Postings per Source
+    jobs: int = 0
+    eligibility: Counter = field(default_factory=Counter)
+    reasons: Counter = field(default_factory=Counter)  # ineligible Jobs, by kind of reason
+    generic: int = 0
+    tiers: Counter = field(default_factory=Counter)
+    low_confidence: int = 0
+    unscored: int = 0  # eligible, not scored yet
+
+    @property
+    def scored(self) -> int:
+        return sum(self.tiers.values())
+
+
+_SHORT_REASONS = {NOT_FULLY_REMOTE_REASON: "nicht voll remote (Regel)", AI_NOT_REMOTE_REASON: "nicht voll remote (KI)"}
+
+
+def reason_kind(reason: str | None) -> str:
+    """'Entfernung 55 km' and 'Ausschlussliste: Praktikum' become 'Entfernung' and 'Ausschlussliste'."""
+    if reason in _SHORT_REASONS:
+        return _SHORT_REASONS[reason]
+    return re.sub(r"\s+\d+\s*km$", "", (reason or "ohne Grund").split(":")[0]).strip()
+
+
+def stage_metrics(conn: sqlite3.Connection, period: Period) -> StageMetrics:
+    m = StageMetrics()
+    cond, params = period.where("started_at")
+    m.daily_runs = conn.execute(f"SELECT count(*) FROM runs WHERE kind = 'daily' AND ok = 1 AND {cond}",
+                                params).fetchone()[0]
+    cond, params = period.where("first_seen")
+    m.postings = dict(conn.execute(f"SELECT source, count(*) FROM postings WHERE {cond} GROUP BY source",
+                                   params).fetchall())
+    cond, params = period.where("j.first_seen")
+    rows = conn.execute(
+        f"""SELECT j.eligibility, j.ineligible_reason, j.is_generic, s.tier, s.low_confidence
+            FROM jobs j LEFT JOIN fit_scores s ON s.job_id = j.id WHERE {cond}""", params).fetchall()
+    for r in rows:
+        m.jobs += 1
+        m.eligibility[r["eligibility"]] += 1
+        if r["eligibility"] == "ineligible":
+            m.reasons[reason_kind(r["ineligible_reason"])] += 1
+        m.generic += r["is_generic"]
+        if r["tier"] is not None:
+            m.tiers[r["tier"]] += 1
+            m.low_confidence += r["low_confidence"]
+        elif r["eligibility"] == "eligible":
+            m.unscored += 1
+    return m
+
+
+@dataclass
+class TermMetrics:
+    term: str
+    jobs: int = 0
+    only_here: int = 0  # Jobs no other Search term found
+    eligible: int = 0
+    tiers: Counter = field(default_factory=Counter)
+    positive: int = 0
+
+
+def term_metrics(conn: sqlite3.Connection, period: Period) -> list[TermMetrics]:
+    """Jobs per Search term, from the Bundesagentur Postings each term found. Terms that were
+    active but found nothing are listed too, since that is a result as well."""
+    cond, params = period.where("p.first_seen")
+    rows = conn.execute(
+        f"""SELECT DISTINCT pt.term, j.id, j.eligibility, j.status, s.tier
+            FROM posting_terms pt JOIN postings p ON p.id = pt.posting_id JOIN jobs j ON j.id = p.job_id
+            LEFT JOIN fit_scores s ON s.job_id = j.id WHERE {cond}""", params).fetchall()
+    terms_per_job = Counter(r["id"] for r in rows)
+    stats: dict[str, TermMetrics] = {}
+    for _, snap in snapshots(conn, period):
+        for term in snap.get("search_terms", []):
+            stats.setdefault(term, TermMetrics(term))
+    for r in rows:
+        t = stats.setdefault(r["term"], TermMetrics(r["term"]))
+        t.jobs += 1
+        t.only_here += terms_per_job[r["id"]] == 1
+        t.eligible += r["eligibility"] == "eligible"
+        if r["tier"] is not None:
+            t.tiers[r["tier"]] += 1
+        t.positive += r["status"] in POSITIVE
+    return sorted(stats.values(), key=lambda t: (-t.jobs, t.term.casefold()))
+
+
+def _share(n: int, total: int) -> str:
+    return f"{n} ({round(100 * n / total)} %)" if total and n else str(n)
+
+
+def _table(header: list[str], rows: list[tuple[str, list[str]]]) -> list[str]:
+    width = max(len(label) for label, _ in rows) + 2
+    cols = [max(len(h), *(len(values[i]) for _, values in rows)) for i, h in enumerate(header)]
+
+    def line(label: str, values: list[str]) -> str:
+        return (label.ljust(width) + "  ".join(v.rjust(c) for v, c in zip(values, cols))).rstrip()
+
+    return [line("", header)] + [line(label, values) for label, values in rows]
+
+
+def stage_report(conn: sqlite3.Connection, chosen: list[Period]) -> list[str]:
+    ms = [stage_metrics(conn, p) for p in chosen]
+
+    def row(label: str, value) -> tuple[str, list[str]]:
+        return label, [value(m) for m in ms]
+
+    rows = [row("Daily runs (erfolgreich)", lambda m: str(m.daily_runs)), row("Neue Postings", lambda m: "")]
+    rows += [row(f"  {label}", lambda m, s=source: str(m.postings.get(s, 0))) for source, label in SOURCES.items()]
+    rows.append(row("Neue Jobs", lambda m: str(m.jobs)))
+    rows += [row(f"  {state}", lambda m, s=state: _share(m.eligibility[s], m.jobs))
+             for state in ("eligible", "unclear", "ineligible")]
+    kinds = sorted({k for m in ms for k in m.reasons}, key=lambda k: -sum(m.reasons[k] for m in ms))
+    if kinds:
+        rows.append(row("Ineligible nach Grund", lambda m: ""))
+        rows += [row(f"  {kind}", lambda m, k=kind: _share(m.reasons[k], m.eligibility["ineligible"]))
+                 for kind in kinds]
+    rows.append(row("Bewertet", lambda m: str(m.scored)))
+    rows += [row(f"  {STARS[tier]}", lambda m, t=tier: _share(m.tiers[t], m.scored)) for tier in (3, 2, 1)]
+    rows.append(row("  geringe Sicherheit", lambda m: _share(m.low_confidence, m.scored)))
+    rows.append(row("  Sammelanzeigen", lambda m: _share(m.generic, m.scored)))
+    rows.append(row("Eligible, noch unbewertet", lambda m: str(m.unscored)))
+    lines = ["Kennzahlen je Stufe (Jobs und Postings nach dem Tag, an dem sie zuerst gesehen wurden):"]
+    lines += _table([p.label for p in chosen], rows)
+    for period in chosen:
+        terms = term_metrics(conn, period)
+        if not terms:
+            continue
+        lines += ["", f"Suchbegriffe ({period.label}, nur Bundesagentur; ein Job zählt bei jedem Begriff, "
+                      "der ihn fand):"]
+        lines += _table(["Jobs", "nur hier", "eligible", "★★★", "★★", "★", "positiv"],
+                        [(t.term, [str(t.jobs), str(t.only_here), str(t.eligible), str(t.tiers[3]),
+                                        str(t.tiers[2]), str(t.tiers[1]), str(t.positive)]) for t in terms])
     return lines

@@ -1,7 +1,16 @@
 import json
+from datetime import date
+
+import pytest
 
 from jobsearch import db
-from jobsearch.evaluation import changes, changes_report, describe
+from jobsearch.cli import cmd_eval
+from jobsearch.eligibility import NOT_FULLY_REMOTE_REASON
+from jobsearch.evaluation import (Period, changes, changes_report, describe, periods, reason_kind, stage_metrics,
+                                  stage_report, term_metrics)
+from jobsearch.scoring import AI_NOT_REMOTE_REASON
+
+from .conftest import add_job
 
 BASE = {"model_scoring": "sonnet", "prompt_scoring": "aaa", "profile": "ppp",
         "search_terms": ["Planer", "Projektleiter"], "alert_mail": True, "radius_km": 30}
@@ -78,3 +87,89 @@ def test_migration_keeps_existing_rows(tmp_path):
     assert (row["kind"], row["settings_json"]) == ("daily", None)
     assert "prompt_hash" in {r["name"] for r in conn.execute("PRAGMA table_info(fit_scores)")}
     conn.close()
+
+
+def score(conn, job_id, tier, low=0):
+    with conn:
+        conn.execute("""INSERT INTO fit_scores (job_id, tier, reasoning, low_confidence, profile_hash, model, scored_at)
+                        VALUES (?, ?, 'Passt.', ?, 'ppp', 'claude-test', '2026-10-16T09:00:00')""", (job_id, tier, low))
+
+
+def found_by(conn, job_id, *terms):
+    posting = conn.execute("SELECT id FROM postings WHERE job_id = ?", (job_id,)).fetchone()[0]
+    with conn:
+        conn.executemany("INSERT INTO posting_terms (posting_id, term) VALUES (?, ?)", [(posting, t) for t in terms])
+
+
+def test_periods_split_into_before_and_after():
+    assert periods(None, None, None) == [Period("gesamt")]
+    assert periods("2026-10-01", None, "2026-10-10") == [Period("vor 2026-10-10", "2026-10-01", "2026-10-10"),
+                                                         Period("ab 2026-10-10", "2026-10-10", None)]
+    with pytest.raises(ValueError):
+        periods("2026-10-10", None, "2026-10-01")
+
+
+@pytest.mark.parametrize("reason, kind", [
+    ("Entfernung 55 km", "Entfernung"),
+    ("Ausschlussliste: Praktikum", "Ausschlussliste"),
+    (NOT_FULLY_REMOTE_REASON, "nicht voll remote (Regel)"),
+    (AI_NOT_REMOTE_REASON, "nicht voll remote (KI)"),
+    (None, "ohne Grund"),
+])
+def test_reason_kinds(reason, kind):
+    assert reason_kind(reason) == kind
+
+
+def test_stage_metrics_count_each_stage_within_the_period(conn):
+    a = add_job(conn, "Planer", first_seen="2026-10-15")
+    b = add_job(conn, "Bauleiter", first_seen="2026-10-15")
+    add_job(conn, "Unscored", first_seen="2026-10-15")
+    add_job(conn, "Weit weg", eligibility="ineligible", reason="Entfernung 80 km", first_seen="2026-10-15")
+    add_job(conn, "Praktikum", eligibility="ineligible", reason="Ausschlussliste: Praktikum", first_seen="2026-10-15")
+    add_job(conn, "Später", first_seen="2026-10-20", source="indeed")
+    score(conn, a, 3)
+    score(conn, b, 1, low=1)
+    with conn:
+        conn.execute("UPDATE jobs SET is_generic = 1 WHERE id = ?", (b,))
+    add_run(conn, "2026-10-15T08:00:00", BASE)
+    with conn:
+        conn.execute("UPDATE runs SET ok = 1")
+    m = stage_metrics(conn, Period("x", "2026-10-15", "2026-10-16"))
+    assert m.daily_runs == 1
+    assert m.postings == {"bundesagentur": 5}
+    assert m.jobs == 5 and m.eligibility == {"eligible": 3, "ineligible": 2}
+    assert m.reasons == {"Entfernung": 1, "Ausschlussliste": 1}
+    assert m.tiers == {3: 1, 1: 1} and m.scored == 2
+    assert (m.low_confidence, m.generic, m.unscored) == (1, 1, 1)
+
+
+def test_term_metrics_show_unique_finds_tiers_positives_and_terms_without_finds(conn):
+    a = add_job(conn, "Planer")
+    b = add_job(conn, "Projektplaner")
+    add_job(conn, "Ohne Begriff")
+    found_by(conn, a, "Planer", "Projekt")
+    found_by(conn, b, "Projekt")
+    score(conn, a, 3)
+    with conn:
+        conn.execute("UPDATE jobs SET status = 'interesting' WHERE id = ?", (a,))
+    add_run(conn, "2026-10-15T08:00:00", {**BASE, "search_terms": ["Planer", "Projekt", "Leerlauf"]})
+    terms = {t.term: t for t in term_metrics(conn, Period("gesamt"))}
+    assert (terms["Projekt"].jobs, terms["Projekt"].only_here) == (2, 1)
+    assert (terms["Planer"].jobs, terms["Planer"].only_here, terms["Planer"].positive) == (1, 0, 1)
+    assert terms["Planer"].tiers == {3: 1}
+    assert terms["Leerlauf"].jobs == 0
+    assert [t.term for t in term_metrics(conn, Period("gesamt"))][0] == "Projekt"  # most Jobs first
+
+
+def test_stage_report_has_one_column_per_period(conn):
+    add_job(conn, "Alt", first_seen="2026-10-10")
+    add_job(conn, "Neu", first_seen="2026-10-20")
+    report = stage_report(conn, periods(None, None, "2026-10-15"))
+    assert report[1].split() == ["vor", "2026-10-15", "ab", "2026-10-15"]
+    assert next(line for line in report if line.startswith("Neue Jobs")).split() == ["Neue", "Jobs", "1", "1"]
+
+
+def test_eval_command_rejects_a_split_outside_the_period(cfg, capsys):
+    assert cmd_eval(cfg, False, since=date(2026, 10, 15), split=date(2026, 10, 1)) == 2
+    assert "liegt nicht im Zeitraum" in capsys.readouterr().err
+    assert cmd_eval(cfg, False, until=date(2026, 10, 15)) == 0
