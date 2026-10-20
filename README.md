@@ -61,6 +61,7 @@ flowchart LR
 - **Cheap model for mechanical work.** Haiku extracts, Sonnet judges.
 - **No browsing in the main loop.** Scoring and extraction run without tools. Python fetches and renders pages itself (Playwright for JavaScript pages) and hands over plain text. The only browsing step is the one-time career page setup, and its result is reviewed by hand.
 - **Structured output, checked twice.** Every call passes a JSON schema that the CLI enforces, and the code then checks that every Job in the batch was answered exactly once. Invalid output gets one retry, and quota or login problems raise a clear German error.
+- **Extracted Postings must be on the page.** Career page text is untrusted, and the extraction model can invent. Every title and link it returns must appear in the page text it was given; the rest is dropped, logged and counted in the career summary ("verworfen (nicht im Seitentext)").
 - **AI failure never blocks collection.** If scoring fails, the run still counts as collected, the Jobs wait as unscored, and the error is stored with the run.
 - **Uncertainty is shown, not hidden.** Jobs scored from a short mail snippet are marked low confidence. Rule decisions store their reason, so wrong filters can be found.
 - **Human in the loop.** The candidate sets a Job status with an optional Feedback note in the dashboard, and recent notes go into the next scoring prompt.
