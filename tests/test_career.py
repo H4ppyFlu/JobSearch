@@ -1,8 +1,10 @@
 import json
 from datetime import date
 
+import pytest
+
 from jobsearch import ai
-from jobsearch.career import FetchError, page_text, run_career_scan, scan_due
+from jobsearch.career import FetchError, grounded, page_text, run_career_scan, scan_due
 from jobsearch.companies import TargetCompany, normalize_company
 from jobsearch.eligibility import Rules
 
@@ -14,7 +16,7 @@ PAGE = """<!doctype html><html><head><title>Karriere</title>
 <nav><a href="/">Start</a></nav>
 <h1>Offene Stellen</h1>
 <ul>
-  <li><a href="/jobs/123?src=web&amp;session=s1">Projektingenieur (m/w/d)</a> <span>Musterstadt</span></li>
+  <li><a href="/jobs/1?src=web&amp;session=s1">Landschaftsgärtner (m/w/d)</a> <span>Musterstadt</span></li>
   <li><a href="https://jobs.example.org/456">Konstrukteur   Maschinenbau</a><span>Beispielstadt</span></li>
 </ul>
 <noscript>Bitte JavaScript aktivieren</noscript>
@@ -24,7 +26,7 @@ PAGE = """<!doctype html><html><head><title>Karriere</title>
 def test_visible_text_keeps_job_links():
     page = page_text(PAGE, "https://muster.example/karriere/")
     assert "Offene Stellen" in page.text
-    assert "Projektingenieur (m/w/d) <https://muster.example/jobs/123?src=web&session=s1>" in page.text
+    assert "Landschaftsgärtner (m/w/d) <https://muster.example/jobs/1?src=web&session=s1>" in page.text
     assert "Konstrukteur Maschinenbau <https://jobs.example.org/456>" in page.text
     assert "tracking" not in page.text and "color" not in page.text and "JavaScript" not in page.text
 
@@ -32,7 +34,7 @@ def test_visible_text_keeps_job_links():
 def test_hash_ignores_changing_links_but_not_changing_jobs():
     base = page_text(PAGE, "https://muster.example/karriere/").hash
     assert page_text(PAGE.replace("session=s1", "session=s2"), "https://muster.example/karriere/").hash == base
-    assert page_text(PAGE.replace("Konstrukteur", "Elektroniker"), "https://muster.example/karriere/").hash != base
+    assert page_text(PAGE.replace("Konstrukteur", "Konditor"), "https://muster.example/karriere/").hash != base
 
 RULES = Rules(30, 70, ("Werkstudent",))
 PLACES = {"Musterstadt": (51.32, 9.49), "Beispielstadt": (51.54, 9.92)}
@@ -88,8 +90,10 @@ def scan(conn, cfg, companies, fetch, ask, day=date(2026, 10, 15)):
     return run_career_scan(conn, cfg, companies, RULES, fetch=fetch, ask=ask, gazetteer=FakeGazetteer(), today=day)
 
 
-DETAIL = "<h1>Projektingenieur</h1><p>Aufgaben: Anlagen planen und in Betrieb nehmen. " + "Mehr Text. " * 40 + "</p>"
-JOB = {"title": "Projektingenieur (m/w/d)", "location": "Musterstadt", "url": "https://muster.example/jobs/1"}
+DETAIL = "<h1>Landschaftsgärtner</h1><p>Aufgaben: Anlagen planen und in Betrieb nehmen. " + "Mehr Text. " * 40 + "</p>"
+# Grounded in PAGE: the title and the raw link as the page shows them
+JOB = {"title": "Landschaftsgärtner (m/w/d)", "location": "Musterstadt",
+       "url": "https://muster.example/jobs/1?src=web&session=s1"}
 TARGETS = [company("Muster Industrie GmbH", "https://muster.example/karriere")]
 
 
@@ -98,7 +102,7 @@ def test_changed_page_is_extracted_into_jobs(conn, cfg):
     counts = scan(conn, cfg, TARGETS, fetch, ExtractAi({"Muster Industrie GmbH": [JOB]}))
     assert (counts.extracted, counts.new_jobs) == (1, 1)
     job = conn.execute("SELECT * FROM jobs").fetchone()
-    assert (job["title"], job["eligibility"], job["is_target_company"]) == ("Projektingenieur (m/w/d)", "eligible", 1)
+    assert (job["title"], job["eligibility"], job["is_target_company"]) == ("Landschaftsgärtner (m/w/d)", "eligible", 1)
     posting = conn.execute("SELECT * FROM postings").fetchone()
     assert posting["source"] == "career_page" and posting["url"] == "https://muster.example/jobs/1"
     assert "Aufgaben: Anlagen planen" in posting["description"]  # fetched from the detail page
@@ -175,7 +179,7 @@ def test_without_a_browser_the_static_text_is_read_once(conn, cfg):
     """English job lists have no (m/w/d). Without Playwright the static text is the best there is."""
     english = PAGE.replace(" (m/w/d)", "")
     fetch = FakeFetch({"https://muster.example/karriere": english, "https://muster.example/jobs/1": "<p>Text</p>"})
-    first = ExtractAi({"Muster Industrie GmbH": [JOB]})
+    first = ExtractAi({"Muster Industrie GmbH": [dict(JOB, title="Landschaftsgärtner")]})
     assert scan(conn, cfg, TARGETS, fetch, first).new_jobs == 1 and first.calls == 1
     again = ExtractAi({})
     scan(conn, cfg, TARGETS, fetch, again, day=date(2026, 10, 22))
@@ -215,10 +219,11 @@ def test_a_failed_scan_in_between_does_not_stop_the_refresh(conn, cfg):
 
 def test_tracking_parameters_do_not_make_a_new_posting(conn, cfg):
     pages = {"https://muster.example/karriere": PAGE, "https://muster.example/jobs/1": "<p>Text</p>"}
-    tracked = dict(JOB, url="https://muster.example/jobs/1?utm_source=web&sid=abc")
+    tracked = JOB  # its link carries src and session parameters
     scan(conn, cfg, TARGETS, FakeFetch(pages), ExtractAi({"Muster Industrie GmbH": [tracked]}))
-    changed = dict(pages, **{"https://muster.example/karriere": PAGE.replace("Offene", "Aktuelle")})
-    retracked = dict(JOB, url="https://muster.example/jobs/1?utm_source=mail&sid=xyz")
+    new_page = PAGE.replace("Offene", "Aktuelle").replace("src=web&amp;session=s1", "src=mail&amp;session=s2")
+    changed = dict(pages, **{"https://muster.example/karriere": new_page})
+    retracked = dict(JOB, url="https://muster.example/jobs/1?src=mail&session=s2")
     counts = scan(conn, cfg, TARGETS, FakeFetch(changed), ExtractAi({"Muster Industrie GmbH": [retracked]}),
                   day=date(2026, 10, 22))
     assert counts.new_jobs == 0
@@ -230,3 +235,36 @@ def test_a_job_page_without_real_text_leaves_the_snippet(conn, cfg):
     scan(conn, cfg, TARGETS, fetch, ExtractAi({"Muster Industrie GmbH": [JOB]}))
     row = conn.execute("SELECT description, is_snippet FROM postings").fetchone()
     assert tuple(row) == (None, 1)
+
+
+GROUNDING_TEXT = page_text(PAGE, "https://muster.example/karriere/").text
+
+
+@pytest.mark.parametrize("item, reason", [
+    ({"title": "Landschaftsgärtner (m/w/d)", "url": ""}, None),
+    ({"title": "Konstrukteur Maschinenbau", "url": ""}, None),  # several spaces in the HTML
+    ({"title": "konstrukteur maschinenBAU", "url": ""}, None),
+    ({"title": "Konditor (m/w/d)", "url": ""}, "Titel"),
+    ({"title": "Landschaftsgärtner (m/w/d)", "url": "https://muster.example/jobs/1?src=web&session=s1"}, None),
+    ({"title": "Konstrukteur Maschinenbau", "url": "https://jobs.example.org/456/"}, None),  # trailing /
+    ({"title": "Landschaftsgärtner (m/w/d)", "url": "https://muster.example/jobs/2"}, "Link"),
+    ({"title": "Landschaftsgärtner (m/w/d)", "url": "https://muster.example/jobs"}, "Link"),  # only a prefix
+])
+def test_grounded(item, reason):
+    result = grounded(item, GROUNDING_TEXT)
+    assert (result is None) if reason is None else (reason in result)
+
+
+def test_a_title_split_over_lines_is_grounded():
+    text = page_text("<h3>Leitung<br>Technik (m/w/d)</h3>", "https://muster.example/").text
+    assert "\n" in text
+    assert grounded({"title": "Leitung Technik (m/w/d)", "url": ""}, text) is None
+
+
+def test_invented_postings_are_dropped_and_grounded_ones_kept(conn, cfg):
+    invented_title = dict(JOB, title="Konditor (m/w/d)", url="")
+    invented_url = dict(JOB, title="Konstrukteur Maschinenbau", url="https://jobs.example.org/999")
+    fetch = FakeFetch({"https://muster.example/karriere": PAGE, "https://muster.example/jobs/1": "<p>Text</p>"})
+    counts = scan(conn, cfg, TARGETS, fetch, ExtractAi({"Muster Industrie GmbH": [invented_title, JOB, invented_url]}))
+    assert counts.new_jobs == 1
+    assert [r[0] for r in conn.execute("SELECT title FROM jobs")] == ["Landschaftsgärtner (m/w/d)"]

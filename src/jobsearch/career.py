@@ -230,6 +230,22 @@ def _posting(company: TargetCompany, item: dict) -> Posting:
                    is_snippet=True)
 
 
+def _normalize(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def grounded(item: dict, text: str) -> str | None:
+    """Why an extracted item is not backed by the page text the AI saw, or None when it is.
+    Titles are often split over inline elements, so any whitespace counts as one space. A link must
+    appear whole, as page_text() writes it, not as the prefix of a longer one."""
+    if _normalize(item["title"]) not in _normalize(text):
+        return "Titel nicht im Seitentext"
+    url = (item.get("url") or "").strip().rstrip("/")
+    if url and not re.search(r"(?:^|[\s<])" + re.escape(url) + r"/?(?=$|[\s>])", text):
+        return "Link nicht im Seitentext"
+    return None
+
+
 def build_prompt(pages: list[_Page]) -> str:
     rubric = resources.files("jobsearch.prompts").joinpath("career_extract.md").read_text(encoding="utf-8")
     items = [{"page_id": i, "company": p.company.name, "url": p.company.career_url, "text": p.text}
@@ -452,7 +468,9 @@ def run_career_scan(conn: sqlite3.Connection, cfg: Config, companies: list[Targe
             counts.extracted += len(batch)
             found = {p["page_id"]: p["postings"] for p in answer.data["pages"]}
             for i, page in enumerate(batch):
-                postings = [_posting(page.company, item) for item in found[i] if item["title"].strip()]
+                # The page text is untrusted and the AI can invent: keep only what the page itself shows
+                items = [item for item in found[i] if item["title"].strip() and grounded(item, page.text) is None]
+                postings = [_posting(page.company, item) for item in items]
                 _store(conn, cfg, companies, rules, postings, gazetteer, index, today, counts)
                 with conn:
                     _warn(_record(conn, page.company, day, content_hash=page.hash, found=len(postings)), counts)

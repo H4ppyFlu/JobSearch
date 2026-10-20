@@ -1,6 +1,6 @@
 # Issue: Grounding check for the Career scan extraction
 
-Status: open. To start, create the branch `implement-career-grounding` from `main`; then one commit per part, each after the user's go.
+Status: in progress on branch `implement-career-grounding`. Part 1 built.
 
 ## Goal
 

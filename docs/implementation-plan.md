@@ -33,6 +33,7 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
   - The `PROFILE_PATH` value is matched with both slash directions and in Git Bash form (`/c/...`), and its folder too.
   - From the review: `git commit -m` keeps lines starting with `#`, so the message check scans them too (only the scissors line of `git commit -v` ends the scan). Git runs in the hook's own working directory, not in `JOBSEARCH_HOME`, so a worktree checks its own index. File names come from `git diff --name-only`, which also lists empty and binary files. Comment lines in `private.example/` no longer count as generic values. `companies.csv` is read as `utf-8-sig`.
   - The same BOM problem hit the Career scan, the career setup and `found_elsewhere.csv`: a CSV saved from a spreadsheet lost its first column name. All three now read past a BOM, and the setup writes `companies.csv` back with the BOM it found.
+- **Career grounding Part 1 built** (2026-10-20, `docs/issues/career-grounding.md`). `career.grounded()` drops every extracted item whose title (whitespace collapsed, casefolded) or link is not in the page text the AI saw; a link must appear whole, not as the prefix of a longer one. Test fixtures now link the job the fake AI returns. The live check follows after Part 2, which makes drops visible.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
