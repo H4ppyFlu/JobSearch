@@ -87,3 +87,21 @@ _Avoid_: Company search, weekly run
 **Digest**:
 The summary of newly found Jobs and Reopenings, grouped by Fit score.
 _Avoid_: Report, results file
+
+### Evaluation
+
+**Settings snapshot**:
+What was in effect for one Daily run: scoring model, prompt and Profile hashes, active Search terms, exclusion list, radii and enabled Sources. A date where the snapshot differs from the one before is a change date, the split point for before/after comparisons.
+_Avoid_: Config dump, version
+
+**Stage**:
+One step of the pipeline a Job passes or gets lost at: collected, Eligibility, scoring, Fit score tier. Each stage has its own lever, such as Search terms, radius or the scoring prompt.
+_Avoid_: Step, phase (phases are build steps in the plan)
+
+**Label**:
+The Job status read as ground truth for the Fit score: interesting, applied and rejected are positive, Not interesting is negative, new is unlabeled. A positive Job in ★ is a miss.
+_Avoid_: Rating, feedback
+
+**Found elsewhere**:
+An opening the candidate found outside the tool and recorded in `private/found_elsewhere.csv`. Tracing it shows the Stage where the pipeline lost it, including openings never collected at all.
+_Avoid_: External job. In German output it is "Fremdfund".
