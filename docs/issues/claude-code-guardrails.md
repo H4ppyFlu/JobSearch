@@ -1,6 +1,6 @@
 # Issue: Guardrails for working on this repo with Claude Code
 
-Status: in progress on branch `implement-claude-code-guardrails`. Parts 1 and 2 done; personal-data check and merge into `main` pending.
+Status: done (2026-10-20), merged into `main`.
 
 ## Goal
 
