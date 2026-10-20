@@ -98,6 +98,10 @@ class Config:
     def search_terms_path(self) -> Path:
         return self.private_dir / "search_terms.txt"
 
+    @property
+    def found_elsewhere_path(self) -> Path:
+        return self.private_dir / "found_elsewhere.csv"
+
 
 def _int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()

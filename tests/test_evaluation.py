@@ -7,8 +7,10 @@ import pytest
 from jobsearch import db
 from jobsearch.cli import cmd_eval
 from jobsearch.eligibility import NOT_FULLY_REMOTE_REASON
-from jobsearch.evaluation import (Period, changes, changes_report, describe, label, periods, reason_kind,
-                                  score_report, score_tables, stage_metrics, stage_report, term_metrics)
+from jobsearch.config import ConfigError
+from jobsearch.evaluation import (Found, Period, changes, changes_report, describe, funnel_report, label, periods,
+                                  reason_kind, score_report, score_tables, stage_metrics, stage_report, term_metrics,
+                                  trace)
 from jobsearch.scoring import AI_NOT_REMOTE_REASON
 
 from .conftest import add_job
@@ -217,3 +219,55 @@ def test_scores_group_by_prompt_version_and_month(conn):
 
 def test_score_report_without_scores_says_so(conn):
     assert score_report(conn, [Period("gesamt")]) == ["Im Zeitraum gibt es keine bewerteten Jobs."]
+
+
+def write_found(path, *rows):
+    lines = ["company,title,url,found_on"] + [",".join(row) for row in rows]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_found_by_url_reports_the_tier_and_status(conn):
+    job = scored_job(conn, "Planer (m/w/d)", 2, "interesting")
+    url = conn.execute("SELECT url FROM postings WHERE job_id = ?", (job,)).fetchone()[0]
+    t = trace(conn, Found("Anders geschrieben", "Anderer Titel", url + "/"), None)
+    assert (t.stage, t.detail) == ("tier2", "als 'Planer (m/w/d)', Status interessant")
+
+
+def test_found_by_company_and_similar_title(conn):
+    add_job(conn, "Data Analyst Vertrieb (m/w/d)", company="Example Tech Services AG")
+    t = trace(conn, Found("Example Tech", "Data Analyst Vertrieb (w/m/d)"), None)
+    assert t.stage == "waiting"
+
+
+def test_found_but_ineligible_names_the_reason(conn):
+    add_job(conn, "Werkstudent Planung", eligibility="ineligible", reason="Ausschlussliste: Werkstudent")
+    t = trace(conn, Found("Muster GmbH", "Werkstudent Planung"), None)
+    assert (t.stage, t.detail) == ("ineligible", "Ausschlussliste")
+
+
+@pytest.mark.parametrize("found, stage", [
+    (Found("Muster GmbH", "Vertriebsleiter"), "not_collected"),  # company known, this opening not
+    (Found("Beispiel AG", "Planer"), "unknown_company"),
+    (Found("Beispiel AG", "Planer", found_on="2026-10-01"), "before"),
+    (Found("Beispiel AG", "Planer", found_on="2026-10-20"), "unknown_company"),
+])
+def test_not_collected_tells_known_from_unknown_companies_and_old_finds(conn, found, stage):
+    add_job(conn, "Planer")
+    assert trace(conn, found, "2026-10-15").stage == stage
+
+
+def test_funnel_report_counts_stages_and_points_to_the_lever(conn, tmp_path):
+    scored_job(conn, "Planer", 1)
+    path = write_found(tmp_path / "found.csv", ("Muster GmbH", "Planer", "", ""), ("Beispiel AG", "Planer", "", ""))
+    report = funnel_report(conn, path)
+    assert report[0] == "Fremdfunde: 2 (aus found.csv)"
+    assert any("Firma nie gesehen" in line and "→ Sources, Zielunternehmen" in line for line in report)
+    assert any(line.split()[:2] == ["★", "1"] and "→ Prompt" in line for line in report)
+    assert "  Beispiel AG – Planer: nicht gesammelt, Firma nie gesehen" in report
+
+
+def test_funnel_with_an_empty_or_missing_file(conn, tmp_path):
+    assert "Noch keine Fremdfunde" in funnel_report(conn, write_found(tmp_path / "found.csv"))[0]
+    with pytest.raises(ConfigError):
+        funnel_report(conn, tmp_path / "missing.csv")

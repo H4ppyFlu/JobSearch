@@ -80,6 +80,7 @@ python -m venv .venv
 - `private/companies.csv`: Target companies, with aliases for the names they use in job ads
 - `private/exclusions.txt`: title words that rule a job out (internships, theses, ...)
 - `private/search_terms.txt`: your own Search terms. Once `PROFILE_PATH` is set, the daily run adds 5–8 terms derived from the Profile, and derives them again whenever the Profile changes. A line `-term` switches a term off, derived or not. `jobsearch status` lists the active ones.
+- `private/found_elsewhere.csv` (optional): openings you found outside the tool (`company,title,url,found_on`). `jobsearch eval --funnel` shows where the pipeline lost each one.
 
 `init` also downloads the GeoNames postal codes for Germany and Switzerland into `data/geo/`, used to place jobs that come with a place name only. They are © GeoNames, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
@@ -96,6 +97,7 @@ python -m venv .venv
 .venv\Scripts\python -m jobsearch career-scan  # check career pages now (otherwise weekly inside daily)
 .venv\Scripts\python -m jobsearch eval [--since D] [--until D] [--split D]  # metrics per stage and Search term
 .venv\Scripts\python -m jobsearch eval --scores [--by model|profile|prompt|month]  # Fit score against Job status
+.venv\Scripts\python -m jobsearch eval --funnel  # where openings found elsewhere got lost
 .venv\Scripts\python -m jobsearch eval --changes  # when settings changed (prompt, Profile, Search terms, ...)
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again

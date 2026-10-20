@@ -274,10 +274,13 @@ def cmd_career_setup(cfg: Config, recheck: bool) -> int:
 
 
 def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date | None = None,
-             split: date | None = None, scores: bool = False, by: str | None = None) -> int:
+             split: date | None = None, scores: bool = False, by: str | None = None, funnel: bool = False) -> int:
     conn = db.connect(cfg.db_path)
     if changes:
         print("\n".join(evaluation.changes_report(conn)))
+        return 0
+    if funnel:
+        print("\n".join(evaluation.funnel_report(conn, cfg.found_elsewhere_path)))
         return 0
     try:
         # --until names the last day, a Period ends the day after
@@ -342,6 +345,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="Vorher und nachher vergleichen, z. B. am Tag einer Änderung (JJJJ-MM-TT)")
     evaluate.add_argument("--scores", action="store_true", help="Fit score gegen Job status")
     evaluate.add_argument("--by", choices=evaluation.GROUPS, help="Fit scores gruppieren (schließt --scores ein)")
+    evaluate.add_argument("--funnel", action="store_true",
+                          help="Wo Stellen aus private/found_elsewhere.csv verloren gingen")
     args = parser.parse_args(argv)
 
     try:
@@ -373,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "dashboard":
             return cmd_dashboard(cfg, args.port, not args.no_browser)
         elif args.command == "eval":
-            return cmd_eval(cfg, args.changes, args.since, args.until, args.split, args.scores, args.by)
+            return cmd_eval(cfg, args.changes, args.since, args.until, args.split, args.scores, args.by, args.funnel)
     except ConfigError as e:
         print(f"Konfiguration: {e}", file=sys.stderr)
         if args.command == "run":

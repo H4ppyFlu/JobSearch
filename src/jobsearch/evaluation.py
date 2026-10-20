@@ -6,17 +6,24 @@
   Jobs and Postings first seen in it, so `--split DATE` compares the weeks before and after a change.
 - Fit score against Job status (`jobsearch eval --scores`): the candidate's own decisions as labels,
   per tier, optionally grouped by model, Profile, prompt version or month.
+- Found elsewhere (`jobsearch eval --funnel`): openings the candidate found outside the tool, and the
+  stage where the pipeline lost each one. This is the only part that sees what was never collected.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import re
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from .companies import normalize_company
+from .config import ConfigError
 from .eligibility import NOT_FULLY_REMOTE_REASON
+from .matching import SIMILAR_TITLE, title_similarity, title_tokens
 from .scoring import AI_NOT_REMOTE_REASON
 
 LABELS = {
@@ -353,4 +360,109 @@ def score_report(conn: sqlite3.Connection, chosen: list[Period], by: str | None 
                 lines.append("Wenige Labels: Unterschiede von ein, zwei Jobs sind hier Zufall.")
     if not lines:
         lines = ["Im Zeitraum gibt es keine bewerteten Jobs."]
+    return lines
+
+
+# --- Found elsewhere -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Found:
+    """An opening the candidate found outside the tool, from private/found_elsewhere.csv."""
+    company: str
+    title: str
+    url: str = ""
+    found_on: str = ""  # YYYY-MM-DD, optional
+
+
+# Stage: label and the lever to pull when openings get lost there.
+STAGES = {
+    "before": ("vor Beginn der Sammlung", ""),
+    "unknown_company": ("nicht gesammelt, Firma nie gesehen", "Sources, Zielunternehmen"),
+    "not_collected": ("nicht gesammelt, Firma bekannt", "Suchbegriffe"),
+    "ineligible": ("ineligible", "Radius, Ausschlussliste, Remote-Erkennung"),
+    "waiting": ("unclear oder unbewertet", "Rückstau, fehlende Beschreibung"),
+    "tier1": ("★", "Prompt, Profil, Feedback notes"),
+    "tier2": ("★★", ""),
+    "tier3": ("★★★", ""),
+}
+
+
+@dataclass(frozen=True)
+class Trace:
+    found: Found
+    stage: str
+    detail: str = ""
+
+
+def read_found(path: Path) -> list[Found]:
+    if not path.exists():
+        raise ConfigError(f"{path} fehlt. 'jobsearch init' legt die Datei an.")
+    with path.open(encoding="utf-8", newline="") as f:
+        rows = [{k: (v or "").strip() for k, v in row.items() if k} for row in csv.DictReader(f)]
+    return [Found(r.get("company", ""), r.get("title", ""), r.get("url", ""), r.get("found_on", ""))
+            for r in rows if r.get("title") or r.get("url")]
+
+
+_POSTINGS = """SELECT p.company, p.title AS posting_title, j.eligibility, j.ineligible_reason, j.status, s.tier
+               FROM postings p JOIN jobs j ON j.id = p.job_id LEFT JOIN fit_scores s ON s.job_id = j.id"""
+
+
+def _same_company(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
+    """Either name's tokens all appear in the other, so 'Example Tech' finds 'Example Tech Services AG'."""
+    return bool(a and b) and (set(a) <= set(b) or set(b) <= set(a))
+
+
+def trace(conn: sqlite3.Connection, found: Found, collecting_since: str | None) -> Trace:
+    """Where the pipeline stands with an opening found elsewhere."""
+    from .dashboard import STATUS_LABELS  # not at the top, so the CLI starts without loading Flask
+
+    row = None
+    if found.url:
+        row = conn.execute(f"{_POSTINGS} WHERE rtrim(p.url, '/') = ?", (found.url.rstrip("/"),)).fetchone()
+    company_seen = row is not None
+    if row is None:
+        company, title = normalize_company(found.company), title_tokens(found.title)
+        best = 0.0
+        for r in conn.execute(_POSTINGS):
+            if not _same_company(company, normalize_company(r["company"])):
+                continue
+            company_seen = True
+            similarity = title_similarity(title, title_tokens(r["posting_title"]))
+            if similarity >= SIMILAR_TITLE and similarity > best:
+                best, row = similarity, r
+    if row is None:
+        if found.found_on and collecting_since and found.found_on < collecting_since:
+            return Trace(found, "before")
+        return Trace(found, "not_collected" if company_seen else "unknown_company")
+    details = []
+    if row["posting_title"] != found.title:
+        details.append(f"als '{row['posting_title']}'")
+    if row["status"] != "new":
+        details.append(f"Status {STATUS_LABELS.get(row['status'], row['status'])}")
+    if row["eligibility"] == "ineligible":
+        stage = "ineligible"
+        details.insert(0, reason_kind(row["ineligible_reason"]))
+    elif row["tier"] is not None:
+        stage = f"tier{row['tier']}"
+    else:
+        stage = "waiting"
+    return Trace(found, stage, ", ".join(details))
+
+
+def funnel_report(conn: sqlite3.Connection, path: Path) -> list[str]:
+    found = read_found(path)
+    if not found:
+        return [f"Noch keine Fremdfunde in {path}. Trage Stellen ein, die du außerhalb des Tools findest."]
+    since = conn.execute("SELECT min(substr(started_at, 1, 10)) FROM runs WHERE kind = 'daily'").fetchone()[0]
+    traces = [trace(conn, f, since) for f in found]
+    per_stage = Counter(t.stage for t in traces)
+    width = max(len(name) for name, _ in STAGES.values()) + 4
+    lines = [f"Fremdfunde: {len(found)} (aus {path.name})"]
+    for stage, (name, lever) in STAGES.items():
+        n = per_stage[stage]
+        lines.append(f"  {name.ljust(width)}{n:>3}" + (f"  → {lever}" if n and lever else ""))
+    lines += ["", "Einzeln:"]
+    for t in traces:
+        what = " – ".join(x for x in (t.found.company, t.found.title or t.found.url) if x)
+        lines.append(f"  {what}: {STAGES[t.stage][0]}" + (f" ({t.detail})" if t.detail else ""))
     return lines

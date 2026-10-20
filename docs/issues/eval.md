@@ -1,6 +1,6 @@
 # Issue: Evaluate pipeline performance and the impact of changes
 
-Status: Parts 1 to 3 done (2026-10-20). Part 4 open.
+Status: Parts 1 to 4 done (2026-10-20). Follow-ups below stay open.
 
 ## Goal
 
