@@ -18,12 +18,13 @@ from datetime import date
 
 import requests
 
-from . import db
+from . import db, prompts
 from .companies import TargetCompany, match_target_company
-from .config import Config
+from .config import Config, ConfigError
 from .eligibility import HOMEOFFICE_REASON, Rules, decide, distance_km, settle_remote
 from .geo import Gazetteer
 from .matching import JobIndex, MatchRules, Placement, attach
+from .scoring import profile_hash
 from .sources import Location, Posting
 from .sources.bundesagentur import BundesagenturClient, SchemaChanged
 from .sources.indeed_mail import Mailbox, MailError, parse_alert
@@ -203,6 +204,34 @@ def collect_mail(conn: sqlite3.Connection, mailbox: Mailbox, cfg: Config, target
         counts.errors.append(f"Alert-Mails: {e}")
 
 
+def settings_snapshot(cfg: Config, targets: list[TargetCompany], rules: Rules, terms: list[str],
+                      alert_mail: bool) -> dict:
+    """What was in effect for this run, so the eval can split results at a change.
+    Lists that are personal or long are kept as hashes, which is enough to see that they changed."""
+    try:
+        profile = profile_hash(cfg.read_profile())
+    except ConfigError:
+        profile = None
+    return {
+        "model_scoring": cfg.model_scoring,
+        "model_extraction": cfg.model_extraction,
+        "prompt_scoring": prompts.version("scoring.md"),
+        "prompt_career_extract": prompts.version("career_extract.md"),
+        "prompt_search_terms": prompts.version("search_terms.md"),
+        "profile": profile,
+        "search_terms": sorted(terms, key=str.casefold),
+        "exclusions": profile_hash("\n".join(sorted(rules.exclusions))),
+        "target_companies": profile_hash("\n".join(sorted(t.name for t in targets))),
+        "alert_mail": alert_mail,
+        "radius_km": rules.radius_km,
+        "radius_target_company_km": rules.radius_target_company_km,
+        "remote_max_window_days": cfg.remote_max_window_days,
+        "reopening_days": cfg.reopening_days,
+        "max_scored_per_run": cfg.max_scored_per_run,
+        "feedback_notes_in_prompt": cfg.feedback_notes_in_prompt,
+    }
+
+
 def run_daily(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -215,7 +244,7 @@ def run_daily(
 ) -> Counts:
     today = today or date.today()
     counts = Counts()
-    run_id = db.start_run(conn, "daily")
+    run_id = db.start_run(conn, "daily", settings_snapshot(cfg, targets, rules, terms, mailbox is not None))
     try:
         window = remote_window_days(conn, today, cfg.remote_max_window_days)
         log.info("Daily run: %d Search terms, remote window %d days", len(terms), window)

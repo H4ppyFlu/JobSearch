@@ -6,6 +6,7 @@ in SQLite's user_version, so a migration runs exactly once per database.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 from importlib import resources
@@ -44,9 +45,13 @@ def migrate(conn: sqlite3.Connection) -> None:
                 conn.execute(f"PRAGMA user_version = {version}")
 
 
-def start_run(conn: sqlite3.Connection, kind: str) -> int:
+def start_run(conn: sqlite3.Connection, kind: str, settings: dict | None = None) -> int:
+    """`settings` is the snapshot of what was in effect, for the eval."""
     with conn:
-        cur = conn.execute("INSERT INTO runs (kind, started_at) VALUES (?, ?)", (kind, now()))
+        cur = conn.execute(
+            "INSERT INTO runs (kind, started_at, settings_json) VALUES (?, ?, ?)",
+            (kind, now(), json.dumps(settings, ensure_ascii=False) if settings is not None else None),
+        )
     return cur.lastrowid
 
 

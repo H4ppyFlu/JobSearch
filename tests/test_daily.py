@@ -1,5 +1,7 @@
+import json
 from datetime import date
 
+from jobsearch import prompts
 from jobsearch.companies import TargetCompany, normalize_company
 from jobsearch.daily import remote_window_days, run_daily
 from jobsearch.eligibility import Rules
@@ -129,3 +131,13 @@ def test_search_terms_are_recorded_per_posting(conn, cfg):
            ORDER BY p.source_id, t.term"""
     ).fetchall()
     assert [tuple(r) for r in rows] == [("ID-1", "Ingenieur"), ("ID-1", "Projekt"), ("ID-2", "Ingenieur")]
+
+
+def test_daily_run_stores_what_was_in_effect(conn, cfg):
+    run_daily(conn, cfg, FakeClient([], []), TARGETS, RULES, ["Planer", "anlagenbau"], today=date(2026, 10, 15))
+    settings = json.loads(conn.execute("SELECT settings_json FROM runs WHERE kind = 'daily'").fetchone()[0])
+    assert settings["search_terms"] == ["anlagenbau", "Planer"]
+    assert settings["prompt_scoring"] == prompts.version("scoring.md")
+    assert settings["profile"] is None  # no Profile configured, the run still works
+    assert settings["radius_km"] == 30 and settings["alert_mail"] is False
+    assert "Werkstudent" not in json.dumps(settings)  # the exclusion list is kept as a hash only

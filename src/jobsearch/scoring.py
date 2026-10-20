@@ -18,7 +18,7 @@ import sqlite3
 from dataclasses import dataclass
 from importlib import resources
 
-from . import ai, db
+from . import ai, db, prompts
 from .config import Config, ConfigError
 from .eligibility import HOMEOFFICE_REASON
 from .matching import merge
@@ -170,7 +170,8 @@ def check_answer(expected_ids: set[int]):
     return check
 
 
-def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash: str, counts: ScoreCounts) -> None:
+def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash: str, prompt_hash: str,
+          counts: ScoreCounts) -> None:
     by_id = {j["id"]: j for j in jobs}
     scored_at = db.now()
     with conn:
@@ -193,12 +194,12 @@ def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash:
             low = not job["description"] or bool(job["snippet_only"])
             conn.execute(
                 """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, part_time_signal,
-                                           remote_signal, low_confidence, profile_hash, model, scored_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                           remote_signal, low_confidence, profile_hash, prompt_hash, model, scored_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (job["id"], s["tier"], s["reasoning"].strip(),
                  json.dumps(s["matching_skills"], ensure_ascii=False),
                  json.dumps(s["missing_skills"], ensure_ascii=False),
-                 s["part_time"], s["remote"], int(low), p_hash, answer.model, scored_at),
+                 s["part_time"], s["remote"], int(low), p_hash, prompt_hash, answer.model, scored_at),
             )
             counts.scored += 1
             counts.low_confidence += int(low)
@@ -228,7 +229,7 @@ def run_scoring(conn: sqlite3.Connection, cfg: Config, limit: int | None = None,
         log.info("Scoring %d Jobs with %s, prompt %d chars", len(jobs), cfg.model_scoring, len(prompt))
         answer = ask(prompt, model=cfg.model_scoring, schema=SCHEMA, system=SYSTEM_PROMPT,
                      check=check_answer({j["id"] for j in jobs}))
-        store(conn, jobs, answer, profile_hash(profile), counts)
+        store(conn, jobs, answer, profile_hash(profile), prompts.version("scoring.md"), counts)
     except (ai.AiError, ConfigError) as e:
         log.error("Scoring failed: %s", e)
         counts.error = str(e)

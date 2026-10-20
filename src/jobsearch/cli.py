@@ -1,4 +1,4 @@
-"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task | dashboard."""
+"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task | dashboard | eval."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import time
 from datetime import date
 from logging.handlers import RotatingFileHandler
 
-from . import ai, config, db, geo, scheduler
+from . import ai, config, db, evaluation, geo, scheduler
 from .career import run_career_scan, scan_due
 from .companies import load_target_companies
 from .config import Config, ConfigError
@@ -273,6 +273,14 @@ def cmd_career_setup(cfg: Config, recheck: bool) -> int:
     return 0
 
 
+def cmd_eval(cfg: Config, changes: bool) -> int:
+    if not changes:
+        print("Bisher gibt es nur 'jobsearch eval --changes'.", file=sys.stderr)
+        return 2
+    print("\n".join(evaluation.changes_report(db.connect(cfg.db_path))))
+    return 0
+
+
 def cmd_dashboard(cfg: Config, port: int, open_browser: bool) -> int:
     import socket
     import threading
@@ -314,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
     dashboard = sub.add_parser("dashboard", help="Dashboard im Browser öffnen")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
+    evaluate = sub.add_parser("eval", help="Auswertung der gespeicherten Läufe (ohne KI)")
+    evaluate.add_argument("--changes", action="store_true", help="Wann sich die Einstellungen geändert haben")
     args = parser.parse_args(argv)
 
     try:
@@ -344,6 +354,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_career_setup(cfg, args.recheck)
         elif args.command == "dashboard":
             return cmd_dashboard(cfg, args.port, not args.no_browser)
+        elif args.command == "eval":
+            return cmd_eval(cfg, args.changes)
     except ConfigError as e:
         print(f"Konfiguration: {e}", file=sys.stderr)
         if args.command == "run":

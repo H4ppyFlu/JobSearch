@@ -94,6 +94,7 @@ python -m venv .venv
 .venv\Scripts\python -m jobsearch dashboard # local web page: Jobs, details, Job status and notes
 .venv\Scripts\python -m jobsearch career-setup [--recheck]  # find career pages with web search (one time)
 .venv\Scripts\python -m jobsearch career-scan  # check career pages now (otherwise weekly inside daily)
+.venv\Scripts\python -m jobsearch eval --changes  # when settings changed (prompt, Profile, Search terms, ...)
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again
 .venv\Scripts\python -m pytest             # tests, never touch the network

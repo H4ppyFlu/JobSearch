@@ -1,5 +1,7 @@
 # Issue: Evaluate pipeline performance and the impact of changes
 
+Status: Part 1 done (2026-10-20). Parts 2–4 open.
+
 ## Goal
 
 Answer two questions with data:

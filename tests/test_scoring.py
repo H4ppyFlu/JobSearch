@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from jobsearch import ai, digest, notify
+from jobsearch import ai, digest, notify, prompts
 from jobsearch.eligibility import HOMEOFFICE_REASON
 from jobsearch.scoring import AI_NOT_REMOTE_REASON, run_scoring
 
@@ -127,3 +127,9 @@ def test_collection_warnings_get_a_toast_even_without_new_jobs(conn, cfg, tmp_pa
     _, report = digest.write_digest(conn, tmp_path, date.today(), counts)
     assert notify.message(report, counts, ["Fehler beim Sammeln: Suche 'x'"]) == (
         "JobSearch", "1 Warnung(en), Details im Digest")
+
+
+def test_each_fit_score_stores_the_prompt_version(conn, cfg):
+    add_job(conn, "Projektingenieur")
+    run_scoring(conn, cfg, ask=FakeAi())
+    assert conn.execute("SELECT prompt_hash FROM fit_scores").fetchone()[0] == prompts.version("scoring.md")
