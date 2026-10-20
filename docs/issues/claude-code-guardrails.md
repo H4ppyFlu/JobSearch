@@ -1,6 +1,6 @@
 # Issue: Guardrails for working on this repo with Claude Code
 
-Status: open. To start, create the branch `implement-claude-code-guardrails` from `main`; then one commit per part, each after the user's go.
+Status: in progress on branch `implement-claude-code-guardrails`. Part 1 done; Part 2 next.
 
 ## Goal
 

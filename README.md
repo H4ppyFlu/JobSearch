@@ -86,6 +86,10 @@ python -m venv .venv
 
 `.env`, `private/` and `data/` are gitignored and never leave your machine.
 
+### Guardrails for Claude Code
+
+`.claude/settings.json` registers a `PreToolUse` hook (`python -m jobsearch.guard profile`) that keeps Claude Code from changing the Profile: any `Edit`, `Write`, `MultiEdit` or `NotebookEdit` on the Profile or anything in its folder is blocked. It reads `PROFILE_PATH` at run time, so the checked-in settings hold no personal path; a `PROFILE_PATH` in the environment wins over `.env`. Shell commands (`Bash`, `PowerShell`) that name the Profile's folder are blocked too, but that is only a string check: a command that builds the path another way, or uses an alias such as Git Bash's `/tmp`, gets through. If the check itself fails on a file write, the write is blocked. The hook needs the venv at `.venv`; Claude Code reads hook settings at session start.
+
 ## Usage
 
 ```
