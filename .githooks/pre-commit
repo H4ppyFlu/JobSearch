@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refuses a commit that adds personal values from .env, private/ or the derived Search terms.
+# Switched on by 'jobsearch init' (git config core.hooksPath .githooks).
+root=$(git rev-parse --show-toplevel)
+py="$root/.venv/Scripts/python.exe"
+[ -x "$py" ] || py="$root/.venv/bin/python"
+if [ ! -x "$py" ]; then
+    echo "Commit abgelehnt: kein Python in .venv, die Prüfung auf persönliche Daten kann nicht laufen." >&2
+    exit 1
+fi
+exec "$py" -m jobsearch.guard staged

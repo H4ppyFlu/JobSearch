@@ -90,6 +90,12 @@ python -m venv .venv
 
 `.claude/settings.json` registers a `PreToolUse` hook (`python -m jobsearch.guard profile`) that keeps Claude Code from changing the Profile: any `Edit`, `Write`, `MultiEdit` or `NotebookEdit` on the Profile or anything in its folder is blocked. It reads `PROFILE_PATH` at run time, so the checked-in settings hold no personal path; a `PROFILE_PATH` in the environment wins over `.env`. Shell commands (`Bash`, `PowerShell`) that name the Profile's folder are blocked too, but that is only a string check: a command that builds the path another way, or uses an alias such as Git Bash's `/tmp`, gets through. If the check itself fails on a file write, the write is blocked. The hook needs the venv at `.venv`; Claude Code reads hook settings at session start.
 
+### Commit check for personal data
+
+`init` runs `git config core.hooksPath .githooks`, which switches on two tracked git hooks. `pre-commit` (`python -m jobsearch.guard staged`) scans the lines and file names a commit adds, `commit-msg` scans the message. They look for the values of `PROFILE_PATH`, `HOME_LOCATION`, `HOME_LAT`, `HOME_LON` and the `IMAP_*` settings, the lines of `private/exclusions.txt` and `private/search_terms.txt`, the names, aliases, locations and career URLs in `private/companies.csv`, and the derived Search terms in the database. Matching is case-insensitive, on whole words, for values of four characters or more; values that `private.example/` also uses are generic and skipped. On a hit the commit is refused with file, line and kind of value (the password stays hidden). This covers commits by hand and by Claude Code alike.
+
+A term you accept in the repo, for example a common technical word that is also one of your Search terms, goes into `private/allowed_terms.txt`. `git commit --no-verify` skips the check on purpose.
+
 ## Usage
 
 ```

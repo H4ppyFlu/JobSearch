@@ -26,6 +26,13 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
   - A crash on a shell command reports with exit 1 instead of blocking, so a malformed `.env` value does not lock out every command. The Bash check misses aliases such as Git Bash's `/tmp` mount.
   - First live check: Claude, asked to edit a test Profile written by PowerShell 5.1's `Out-File` (UTF-16), used a shell command instead of `Edit` and reached the folder through `$env:TEMP`, so the string check missed it. The check now expands `$X`, `${X}`, `%X%`, `$env:X` and `~` before comparing. Commands that `cd` into the folder and then use relative paths still get through.
   - Windows writes stderr in the console code page; the module switches stdin and stderr to UTF-8 so umlauts in the reason come through.
+- **Guardrails Part 2 done** (2026-10-20). Tracked `.githooks/pre-commit` and `commit-msg` run `jobsearch.guard staged` and `message`; `init` sets `core.hooksPath`. Live check in a throwaway repo with a synthetic value in a temporary `private/` (via `JOBSEARCH_HOME`): a file and a message with the value were refused, the same commit without it went through, `--no-verify` passed, and a missing venv refused the commit. Findings:
+  - A dry run on this branch with the real private files refused the commit: a common technical word that is also a manual Search term appears in the hook scripts and in code. Whole-word matching cannot tell the two meanings apart; such words go into `private/allowed_terms.txt`.
+  - The hook scripts must stay LF, or `sh` fails on the shebang; `.gitattributes` pins `.githooks/*` to `eol=lf`.
+  - The scan uses `--no-renames`, so a renamed file counts as fully added and is scanned again. Safer, but a moved file with an accepted term needs the allowlist.
+  - The `PROFILE_PATH` value is matched with both slash directions and in Git Bash form (`/c/...`), and its folder too.
+  - From the review: `git commit -m` keeps lines starting with `#`, so the message check scans them too (only the scissors line of `git commit -v` ends the scan). Git runs in the hook's own working directory, not in `JOBSEARCH_HOME`, so a worktree checks its own index. File names come from `git diff --name-only`, which also lists empty and binary files. Comment lines in `private.example/` no longer count as generic values. `companies.csv` is read as `utf-8-sig`.
+  - Open: `companies.load_target_companies` still reads `companies.csv` as plain `utf-8`, so a list saved with a BOM loses its `name` column in the Career scan too.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)

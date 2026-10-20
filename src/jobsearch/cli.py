@@ -11,7 +11,7 @@ import time
 from datetime import date, timedelta
 from logging.handlers import RotatingFileHandler
 
-from . import ai, config, db, evaluation, geo, scheduler
+from . import ai, config, db, evaluation, geo, guard, scheduler
 from .career import run_career_scan, scan_due
 from .companies import load_target_companies
 from .config import Config, ConfigError
@@ -55,6 +55,7 @@ def cmd_init(cfg: Config) -> None:
         created.append(".env")
     db.connect(cfg.db_path).close()
     print(f"Datenbank bereit: {cfg.db_path}")
+    print(guard.enable_commit_check(cfg.root))
     if not cfg.geo_path.exists():
         try:
             n = geo.download(cfg.geo_path)
