@@ -533,7 +533,9 @@ def usage_metrics(conn: sqlite3.Connection, period: Period) -> UsageMetrics:
     # since its run starts before its AI call.
     cond, params = period.where("scored_at")
     m.scored, m.good = conn.execute(
-        f"""SELECT count(*), coalesce(sum(tier >= 2), 0) FROM fit_scores WHERE {cond} AND scored_at >= ?""",
+        # A Job's first Fit score only: later ones come from rescoring calls, not from scoring calls.
+        f"""SELECT count(*), coalesce(sum(tier >= 2), 0) FROM fit_scores f WHERE {cond} AND scored_at >= ?
+            AND f.id = (SELECT min(id) FROM fit_scores WHERE job_id = f.job_id)""",
         [*params, first]).fetchone()
     cond, params = period.where("started_at")
     m.pages = sum(json.loads(r["counts_json"] or "{}").get("extracted", 0) for r in conn.execute(

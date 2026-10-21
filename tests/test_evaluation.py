@@ -449,3 +449,17 @@ def test_a_found_elsewhere_opening_that_was_sorted_out_names_that_stage(conn, tm
     report = funnel_report(conn, write_found(tmp_path / "found.csv", ("Muster GmbH", "Planer", url, "")))
     assert any("aussortiert" in line and "1  → Prompt, Profil, Feedback notes" in line for line in report)
     assert len(report) == 1 + len(STAGES) + 3
+
+
+def test_api_equivalent_per_scored_job_leaves_out_rescored_rows(conn):
+    add_call(conn, "2026-10-15T08:00:00", cost=0.30)
+    add_call(conn, "2026-10-16T08:00:00", purpose="rescoring", cost=0.50)
+    for tier in (1, 1, 2):
+        add_tier(conn, tier, "2026-10-15T08:02:00")
+    with conn:  # a later rescore of the first Job, paid by the rescoring call
+        conn.execute("""INSERT INTO fit_scores (job_id, tier, reasoning, profile_hash, model, scored_at)
+                        SELECT job_id, 3, 'Neu.', 'ppp', 'claude-test', '2026-10-16T08:01:00' FROM fit_scores
+                        ORDER BY id LIMIT 1""")
+    m = usage_metrics(conn, Period("gesamt"))
+    assert (m.scored, m.good) == (3, 1)
+    assert m.per_scored == pytest.approx(0.10)

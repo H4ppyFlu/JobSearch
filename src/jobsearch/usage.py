@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 # What each call is for, with its German label.
 PURPOSES = {
     "scoring": "Bewertung",
+    "rescoring": "Neubewertung",
     "career_extract": "Karriereseiten auslesen",
     "career_setup": "Karriereseiten suchen",
     "search_terms": "Suchbegriffe ableiten",

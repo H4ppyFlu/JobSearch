@@ -1,7 +1,8 @@
 """The Digest: a German Markdown summary per day in data/digests/YYYY-MM-DD.md.
 
 It lists the Jobs scored that day by Fit score, the Reopenings found that day,
-and how many Jobs still wait for scoring. Sorted out Jobs are only counted. A second run on the same day rewrites
+and how many Jobs still wait for scoring. Sorted out Jobs are only counted, and
+Jobs rescored that day are left out, since they were scored before. A second run on the same day rewrites
 the file, so it always shows the whole day.
 """
 
@@ -45,8 +46,9 @@ def collect_day(conn: sqlite3.Connection, day: date) -> DayReport:
            FROM fit_scores s JOIN jobs j ON j.id = s.job_id
            WHERE s.scored_at LIKE ? AND j.eligibility = 'eligible'
              AND s.id = (SELECT max(id) FROM fit_scores WHERE job_id = j.id)
+             AND NOT EXISTS (SELECT 1 FROM fit_scores o WHERE o.job_id = j.id AND o.scored_at < ?)
            ORDER BY s.tier DESC, j.is_target_company DESC, j.distance_km""",
-        (f"{day.isoformat()}%",),
+        (f"{day.isoformat()}%", day.isoformat()),
     ).fetchall()
     for row in rows:
         if row["sorted_out"]:

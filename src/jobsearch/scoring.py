@@ -7,6 +7,10 @@ are merged into the candidate instead of getting a score of their own.
 A run scores at most MAX_SCORED_PER_RUN Jobs. The rest wait as unscored for the
 next run. If the AI step fails, nothing is written and the Jobs simply stay
 unscored, so a failure never loses collected data.
+
+Rescoring (run_rescoring, a manual command) rates ★ Jobs again whose newest Fit
+score came from an older scoring prompt. It only adds Fit scores: no merge, and
+eligibility and the remote decision stay as they are.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import hashlib
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 
 from . import ai, db, prompts
@@ -92,16 +96,17 @@ def backlog(conn: sqlite3.Connection) -> int:
     return conn.execute(f"SELECT count(*) FROM jobs j WHERE {_SCOREABLE}").fetchone()[0]
 
 
+_JOB_FIELDS = """j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.eligibility,
+    j.match_candidate,
+    (SELECT p.description FROM postings p WHERE p.job_id = j.id AND p.description IS NOT NULL
+     ORDER BY length(p.description) DESC LIMIT 1) AS description,
+    NOT EXISTS (SELECT 1 FROM postings p WHERE p.job_id = j.id AND p.is_snippet = 0) AS snippet_only"""
+
+
 def pick_jobs(conn: sqlite3.Connection, limit: int) -> list[dict]:
     """The newest unscored Jobs, each with its longest description."""
     rows = conn.execute(
-        f"""SELECT j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.eligibility,
-                   j.match_candidate,
-                   (SELECT p.description FROM postings p WHERE p.job_id = j.id AND p.description IS NOT NULL
-                    ORDER BY length(p.description) DESC LIMIT 1) AS description,
-                   NOT EXISTS (SELECT 1 FROM postings p WHERE p.job_id = j.id AND p.is_snippet = 0) AS snippet_only
-            FROM jobs j WHERE {_SCOREABLE}
-            ORDER BY j.first_seen DESC, j.id DESC LIMIT ?""",
+        f"SELECT {_JOB_FIELDS} FROM jobs j WHERE {_SCOREABLE} ORDER BY j.first_seen DESC, j.id DESC LIMIT ?",
         (limit,),
     ).fetchall()
     jobs = [dict(r) for r in rows]
@@ -179,6 +184,23 @@ def check_answer(expected_ids: set[int]):
     return check
 
 
+def insert_score(conn: sqlite3.Connection, job: dict, s: dict, p_hash: str, prompt_hash: str, model: str,
+                 scored_at: str) -> bool:
+    """One fit_scores row from the answer for one Job. Returns whether it is of Low confidence."""
+    low = not job["description"] or bool(job["snippet_only"])
+    conn.execute(
+        """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, part_time_signal,
+                                   remote_signal, low_confidence, sorted_out, profile_hash, prompt_hash, model,
+                                   scored_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (job["id"], s["tier"], s["reasoning"].strip(),
+         json.dumps(s["matching_skills"], ensure_ascii=False),
+         json.dumps(s["missing_skills"], ensure_ascii=False),
+         s["part_time"], s["remote"], int(low), int(s["sorted_out"]), p_hash, prompt_hash, model, scored_at),
+    )
+    return low
+
+
 def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash: str, prompt_hash: str,
           counts: ScoreCounts) -> None:
     by_id = {j["id"]: j for j in jobs}
@@ -203,18 +225,7 @@ def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash:
                     counts.merged += 1
                     continue
             conn.execute("UPDATE jobs SET match_candidate = NULL WHERE id = ?", (job["id"],))
-            low = not job["description"] or bool(job["snippet_only"])
-            conn.execute(
-                """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, part_time_signal,
-                                           remote_signal, low_confidence, sorted_out, profile_hash, prompt_hash, model,
-                                           scored_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (job["id"], s["tier"], s["reasoning"].strip(),
-                 json.dumps(s["matching_skills"], ensure_ascii=False),
-                 json.dumps(s["missing_skills"], ensure_ascii=False),
-                 s["part_time"], s["remote"], int(low), int(s["sorted_out"]), p_hash, prompt_hash, answer.model,
-                 scored_at),
-            )
+            low = insert_score(conn, job, s, p_hash, prompt_hash, answer.model, scored_at)
             counts.scored += 1
             counts.sorted_out += int(s["sorted_out"])
             counts.low_confidence += int(low)
@@ -253,4 +264,78 @@ def run_scoring(conn: sqlite3.Connection, cfg: Config, limit: int | None = None,
         raise
     counts.backlog = backlog(conn)
     db.finish_run(conn, run_id, counts.error is None, json.dumps(counts.__dict__, ensure_ascii=False), counts.error)
+    return counts
+
+
+# --- Rescoring -----------------------------------------------------------------------------------
+
+# ★ Jobs still open to the candidate whose newest Fit score came from another scoring prompt.
+_RESCOREABLE = """
+    j.eligibility != 'ineligible' AND j.status = 'new'
+    AND s.tier = 1 AND (s.prompt_hash IS NULL OR s.prompt_hash != ?)
+"""
+_NEWEST = "JOIN fit_scores s ON s.id = (SELECT max(id) FROM fit_scores WHERE job_id = j.id)"
+
+
+@dataclass
+class RescoreCounts:
+    rescored: int = 0
+    sorted_out: int = 0
+    tier_changed: int = 0
+    left: int = 0  # still to rescore after this call
+    moved_up: list[dict] = field(default_factory=list)  # title, company and new tier of the Jobs that left ★
+    error: str | None = None
+
+
+def rescore_left(conn: sqlite3.Connection, prompt_hash: str) -> int:
+    return conn.execute(f"SELECT count(*) FROM jobs j {_NEWEST} WHERE {_RESCOREABLE}", (prompt_hash,)).fetchone()[0]
+
+
+def pick_rescore(conn: sqlite3.Connection, prompt_hash: str, limit: int) -> list[dict]:
+    rows = conn.execute(
+        f"""SELECT {_JOB_FIELDS}, s.tier AS old_tier FROM jobs j {_NEWEST} WHERE {_RESCOREABLE}
+            ORDER BY j.first_seen DESC, j.id DESC LIMIT ?""",
+        (prompt_hash, limit),
+    ).fetchall()
+    return [{**dict(r), "candidate": None} for r in rows]  # a scored Job has no match candidate left
+
+
+def store_rescore(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash: str, prompt_hash: str,
+                  counts: RescoreCounts) -> None:
+    """Only the score is new. `generic` can set is_generic but never clears it."""
+    by_id = {j["id"]: j for j in jobs}
+    scored_at = db.now()
+    with conn:
+        for s in answer.data["scores"]:
+            job = by_id[s["job_id"]]
+            if s["injection_suspected"]:
+                log.warning("Job %d: the ad may contain instructions to the AI (prompt injection)", job["id"])
+            if s["generic"]:
+                conn.execute("UPDATE jobs SET is_generic = 1 WHERE id = ?", (job["id"],))
+            insert_score(conn, job, s, p_hash, prompt_hash, answer.model, scored_at)
+            counts.rescored += 1
+            counts.sorted_out += int(s["sorted_out"])
+            counts.tier_changed += s["tier"] != job["old_tier"]
+            if s["tier"] > job["old_tier"]:
+                counts.moved_up.append({"title": job["title"], "company": job["company"], "tier": s["tier"]})
+
+
+def run_rescoring(conn: sqlite3.Connection, cfg: Config, ask=ai.ask) -> RescoreCounts:
+    """Rescore every ★ Job from an older prompt, newest first, in batches of MAX_SCORED_PER_RUN. The first
+    failing batch ends the call; what is written stays, and the next call continues with the rest."""
+    counts = RescoreCounts()
+    prompt_hash = prompts.version("scoring.md")
+    try:
+        profile = cfg.read_profile()
+        notes = recent_notes(conn, cfg.feedback_notes_in_prompt)
+        while jobs := pick_rescore(conn, prompt_hash, cfg.max_scored_per_run):
+            prompt = build_prompt(profile, notes, jobs)
+            log.info("Rescoring %d Jobs with %s, prompt %d chars", len(jobs), cfg.model_scoring, len(prompt))
+            answer = ask(prompt, purpose="rescoring", model=cfg.model_scoring, schema=SCHEMA, system=SYSTEM_PROMPT,
+                         check=check_answer({j["id"] for j in jobs}), usage_recorder=db.usage_recorder(conn))
+            store_rescore(conn, jobs, answer, profile_hash(profile), prompt_hash, counts)
+    except (ai.AiError, ConfigError) as e:
+        log.error("Rescoring failed: %s", e)
+        counts.error = str(e)
+    counts.left = rescore_left(conn, prompt_hash)
     return counts

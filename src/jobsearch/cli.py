@@ -20,7 +20,7 @@ from .daily import run_daily
 from .digest import write_digest
 from .eligibility import Rules
 from .notify import notify, toast
-from .scoring import backlog, run_scoring
+from .scoring import backlog, run_rescoring, run_scoring
 from .search_terms import active_terms, derived_terms, is_current, refresh_derived, switched_off
 from .sources.bundesagentur import BundesagenturClient
 from .sources.indeed_mail import Mailbox
@@ -131,6 +131,25 @@ def cmd_score(cfg: Config, conn, limit: int | None = None, warnings: list[str] =
     notify(report, counts, path, warnings)
     if counts.error:
         print(f"Fehler bei der Bewertung: {counts.error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_rescore(cfg: Config, ask=ai.ask) -> int:
+    """Rescore the ★ Jobs from an older scoring prompt, all in one go. Returns 1 if a batch failed."""
+    counts = run_rescoring(db.connect(cfg.db_path), cfg, ask=ask)
+    if not counts.rescored and not counts.error:
+        print("Keine ★-Jobs mit älterem Bewertungs-Prompt, nichts neu zu bewerten.")
+        return 0
+    print(f"Neubewertung: bewertet {counts.rescored}, davon aussortiert {counts.sorted_out}, "
+          f"Tier verändert {counts.tier_changed}, übrig {counts.left}")
+    if counts.moved_up:
+        print("Aufgestiegen (vielleicht jetzt einen Blick wert):")
+        for job in counts.moved_up:
+            print(f"  ★ → {evaluation.STARS[job['tier']]}: {job['title']} – {job['company']}")
+    if counts.error:
+        print(f"Neubewertung abgebrochen: {counts.error}. Schon bewertete Jobs bleiben gespeichert, übrig "
+              f"{counts.left}; erneut aufrufen, um fortzusetzen.", file=sys.stderr)
         return 1
     return 0
 
@@ -437,6 +456,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="Karriereseiten: wenn fällig (Standard), immer oder nie")
     score = sub.add_parser("score", help="Unbewertete Jobs bewerten, Digest schreiben")
     score.add_argument("--limit", type=int, help="Höchstens so viele Jobs (statt MAX_SCORED_PER_RUN)")
+    sub.add_parser("rescore", help="★-Jobs mit älterem Bewertungs-Prompt neu bewerten "
+                                   "(ein KI-Aufruf je MAX_SCORED_PER_RUN Jobs)")
     sub.add_parser("run", help="Geplanter Lauf: Daily run, falls heute noch keiner erfolgreich war")
     sub.add_parser("install-task", help="Aufgabe in der Aufgabenplanung anlegen (bei Anmeldung)")
     sub.add_parser("uninstall-task", help="Aufgabe aus der Aufgabenplanung entfernen")
@@ -478,7 +499,7 @@ def main(argv: list[str] | None = None) -> int:
             cmd_init(cfg)
         elif args.command == "status":
             cmd_status(cfg)
-        elif args.command in ("daily", "score", "career-scan", "report"):
+        elif args.command in ("daily", "score", "rescore", "career-scan", "report"):
             # The same lock as the scheduled run, so a manual run never overlaps it.
             with scheduler.RunLock(cfg.data_dir / "run.lock") as held:
                 if not held:
@@ -490,6 +511,8 @@ def main(argv: list[str] | None = None) -> int:
                     return cmd_career_scan(cfg)
                 if args.command == "report":
                     return cmd_report(cfg, args.dry_run)
+                if args.command == "rescore":
+                    return cmd_rescore(cfg)
                 return cmd_score(cfg, db.connect(cfg.db_path), args.limit)
         elif args.command == "run":
             return cmd_run(cfg)
