@@ -14,7 +14,8 @@ INJECTION = FIXTURES / "injection"
 def score(job_id, tier=1, remote="none", same=False, suspected=None):
     return {"job_id": job_id, "tier": tier, "reasoning": "Passt nicht.", "matching_skills": [],
             "missing_skills": ["DATEV"], "part_time": "unknown", "remote": remote, "generic": False,
-            "same_as_candidate": same, "injection_suspected": job_id != 1 if suspected is None else suspected}
+            "same_as_candidate": same, "injection_suspected": job_id != 1 if suspected is None else suspected,
+            "sorted_out": False}
 
 
 # What a model that resists and spots every injection answers

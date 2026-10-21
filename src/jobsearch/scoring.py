@@ -56,9 +56,11 @@ SCHEMA = {
                     "generic": {"type": "boolean"},
                     "same_as_candidate": {"type": "boolean"},
                     "injection_suspected": {"type": "boolean"},
+                    "sorted_out": {"type": "boolean"},
                 },
                 "required": ["job_id", "tier", "reasoning", "matching_skills", "missing_skills",
-                             "part_time", "remote", "generic", "same_as_candidate", "injection_suspected"],
+                             "part_time", "remote", "generic", "same_as_candidate", "injection_suspected",
+                             "sorted_out"],
                 "additionalProperties": False,
             },
         }
@@ -77,6 +79,7 @@ class ScoreCounts:
     merged: int = 0
     generic: int = 0
     injection_suspected: int = 0  # ads the model flagged as addressing it; scored as usual
+    sorted_out: int = 0  # ★ Jobs the model marked as clearly outside the candidate's field
     backlog: int = 0  # still unscored after this run
     error: str | None = None
 
@@ -170,6 +173,9 @@ def check_answer(expected_ids: set[int]):
         if set(ids) != expected_ids:
             missing, extra = expected_ids - set(ids), set(ids) - expected_ids
             raise ai.InvalidAnswer(f"fehlende Jobs {sorted(missing)}, unbekannte Jobs {sorted(extra)}")
+        wrong = sorted(s["job_id"] for s in data["scores"] if s.get("sorted_out") and s.get("tier") != 1)
+        if wrong:
+            raise ai.InvalidAnswer(f"aussortiert, aber nicht ★: Jobs {wrong}")
     return check
 
 
@@ -200,14 +206,17 @@ def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash:
             low = not job["description"] or bool(job["snippet_only"])
             conn.execute(
                 """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, part_time_signal,
-                                           remote_signal, low_confidence, profile_hash, prompt_hash, model, scored_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                           remote_signal, low_confidence, sorted_out, profile_hash, prompt_hash, model,
+                                           scored_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (job["id"], s["tier"], s["reasoning"].strip(),
                  json.dumps(s["matching_skills"], ensure_ascii=False),
                  json.dumps(s["missing_skills"], ensure_ascii=False),
-                 s["part_time"], s["remote"], int(low), p_hash, prompt_hash, answer.model, scored_at),
+                 s["part_time"], s["remote"], int(low), int(s["sorted_out"]), p_hash, prompt_hash, answer.model,
+                 scored_at),
             )
             counts.scored += 1
+            counts.sorted_out += int(s["sorted_out"])
             counts.low_confidence += int(low)
             if s["remote"] != "unknown":
                 conn.execute("UPDATE jobs SET remote_type = ? WHERE id = ?", (s["remote"], job["id"]))

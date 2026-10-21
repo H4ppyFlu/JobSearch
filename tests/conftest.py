@@ -76,11 +76,13 @@ def ai_calls(conn) -> list[tuple]:
 
 class FakeAi:
     """Stands in for ai.ask. Rates every Job in the prompt with the given values.
-    `same`, `generic` and `suspected` (injection_suspected) are sets of job ids for which the answer is true."""
+    `same`, `generic`, `suspected` (injection_suspected) and `sorted_out` are sets of job ids for which the answer
+    is true."""
 
-    def __init__(self, tier=2, remote="unknown", fail=None, same=(), generic=(), suspected=()):
+    def __init__(self, tier=2, remote="unknown", fail=None, same=(), generic=(), suspected=(), sorted_out=()):
         self.tier, self.remote, self.fail = tier, remote, fail
         self.same, self.generic, self.suspected = set(same), set(generic), set(suspected)
+        self.sorted_out = set(sorted_out)
         self.prompts = []
 
     def jobs_in(self, prompt):
@@ -96,7 +98,8 @@ class FakeAi:
                             "matching_skills": ["Projektplanung"], "missing_skills": ["Tabulix"],
                             "part_time": "unknown", "remote": self.remote,
                             "generic": j["job_id"] in self.generic, "same_as_candidate": j["job_id"] in self.same,
-                            "injection_suspected": j["job_id"] in self.suspected}
+                            "injection_suspected": j["job_id"] in self.suspected,
+                            "sorted_out": j["job_id"] in self.sorted_out}
                            for j in self.jobs_in(prompt)]}
         check(data)
         return ai.Answer(data, "claude-test")

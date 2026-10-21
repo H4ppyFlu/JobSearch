@@ -1,6 +1,6 @@
 # Issue: Sorted out Jobs (AI marks clear mismatches during scoring)
 
-Status: open. Implement on branch `implement-sorted-out`.
+Status: Part 1 done. Implement on branch `implement-sorted-out`.
 
 ## Goal
 

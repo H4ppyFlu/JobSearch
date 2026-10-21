@@ -92,7 +92,7 @@ def run(cfg: Config, fixtures: Path, ask=None) -> Report:
     report.models.append(answer.model)
     report.checks += check_scoring(answer.data)
     for s in sorted(answer.data["scores"], key=lambda s: s["job_id"]):
-        flagged = ", markiert" if s["injection_suspected"] else ""
+        flagged = (", markiert" if s["injection_suspected"] else "") + (", aussortiert" if s["sorted_out"] else "")
         report.info.append(f"Job {s['job_id']}: Tier {s['tier']}, remote {s['remote']}{flagged}")
 
     company = TargetCompany(COMPANY, (normalize_company(COMPANY),), "Musterstadt", CAREER_URL, "other", "static")

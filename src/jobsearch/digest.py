@@ -1,7 +1,7 @@
 """The Digest: a German Markdown summary per day in data/digests/YYYY-MM-DD.md.
 
 It lists the Jobs scored that day by Fit score, the Reopenings found that day,
-and how many Jobs still wait for scoring. A second run on the same day rewrites
+and how many Jobs still wait for scoring. Sorted out Jobs are only counted. A second run on the same day rewrites
 the file, so it always shows the whole day.
 """
 
@@ -27,6 +27,7 @@ class DayReport:
     jobs: dict[int, list[dict]] = field(default_factory=lambda: {3: [], 2: [], 1: []})
     reopenings: list[dict] = field(default_factory=list)
     backlog: int = 0
+    sorted_out: int = 0
     ai_usage: usage.Usage = field(default_factory=usage.Usage)
 
     @property
@@ -39,7 +40,7 @@ def collect_day(conn: sqlite3.Connection, day: date) -> DayReport:
     rows = conn.execute(
         """SELECT j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.remote_type, j.is_generic,
                   s.tier, s.reasoning, s.matching_skills, s.missing_skills, s.part_time_signal, s.low_confidence,
-                  (SELECT p.url FROM postings p WHERE p.job_id = j.id AND p.url IS NOT NULL
+                  s.sorted_out, (SELECT p.url FROM postings p WHERE p.job_id = j.id AND p.url IS NOT NULL
                    ORDER BY p.id LIMIT 1) AS url
            FROM fit_scores s JOIN jobs j ON j.id = s.job_id
            WHERE s.scored_at LIKE ? AND j.eligibility = 'eligible'
@@ -48,7 +49,10 @@ def collect_day(conn: sqlite3.Connection, day: date) -> DayReport:
         (f"{day.isoformat()}%",),
     ).fetchall()
     for row in rows:
-        report.jobs[row["tier"]].append(dict(row))
+        if row["sorted_out"]:
+            report.sorted_out += 1
+        else:
+            report.jobs[row["tier"]].append(dict(row))
     report.reopenings = [dict(r) for r in conn.execute(
         """SELECT j.title, j.company, old.first_seen AS earlier FROM jobs j JOIN jobs old ON old.id = j.reopening_of
            WHERE j.first_seen = ? ORDER BY j.id""",
@@ -81,7 +85,7 @@ def _facts(job: dict) -> str:
 
 
 def render(report: DayReport, scoring: ScoreCounts | None = None, warnings: list[str] = ()) -> str:
-    total = sum(len(v) for v in report.jobs.values())
+    total = sum(len(v) for v in report.jobs.values()) + report.sorted_out
     lines = [f"# Jobs vom {report.day:%d.%m.%Y}", ""]
     lines.append(f"{total} neu bewertete Jobs in Reichweite. Warten auf Bewertung: {report.backlog}.")
     if report.ai_usage.calls:
@@ -108,6 +112,8 @@ def render(report: DayReport, scoring: ScoreCounts | None = None, warnings: list
     weak = report.jobs[1]
     lines += ["", f"## {TIER_TITLES[1]} ({len(weak)})", ""]
     lines += [f"- {_link(job)} – {job['company']}" for job in weak] or ["Keine."]
+    if report.sorted_out:
+        lines += ["", f"Von der KI aussortiert: {report.sorted_out}"]
     if report.reopenings:
         lines += ["", f"## Wieder ausgeschrieben ({len(report.reopenings)})", ""]
         lines += [f"- {r['title']} – {r['company']} (zuerst gesehen am {r['earlier']})" for r in report.reopenings]

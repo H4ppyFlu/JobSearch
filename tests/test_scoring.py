@@ -175,3 +175,57 @@ def test_digest_names_the_ai_usage_of_the_day(conn, tmp_path):
 
 def test_digest_without_ai_calls_has_no_usage_line(conn, tmp_path):
     assert "KI-Verbrauch" not in digest.write_digest(conn, tmp_path, date(2026, 10, 15))[0].read_text(encoding="utf-8")
+
+
+def _answer(tier, sorted_out):
+    return {"scores": [{"job_id": 1, "tier": tier, "sorted_out": sorted_out}]}
+
+
+def test_sorted_out_is_only_allowed_with_tier_1():
+    from jobsearch.scoring import check_answer
+    for tier in (2, 3):
+        with pytest.raises(ai.InvalidAnswer, match="aussortiert"):
+            check_answer({1})(_answer(tier, True))
+    check_answer({1})(_answer(1, True))
+    check_answer({1})(_answer(3, False))
+
+
+def test_a_sorted_out_job_is_stored_with_its_score_and_counted(conn, cfg):
+    off = add_job(conn, "Koch")
+    kept = add_job(conn, "Sachbearbeiter")
+    counts = run_scoring(conn, cfg, ask=FakeAi(tier=1, sorted_out={off}))
+    assert counts.scored == 2 and counts.sorted_out == 1
+    rows = dict(conn.execute("SELECT job_id, sorted_out FROM fit_scores").fetchall())
+    assert rows == {off: 1, kept: 0}
+    run = conn.execute("SELECT counts_json FROM runs WHERE kind = 'score'").fetchone()[0]
+    assert json.loads(run)["sorted_out"] == 1
+
+
+def test_the_migration_keeps_old_fit_scores_not_sorted_out(tmp_path):
+    path = tmp_path / "old.db"
+    old = db.connect(path, run_migrations=False)
+    for version, sql in db._migrations():
+        if version <= 9:
+            old.executescript(sql)
+    old.execute("PRAGMA user_version = 9")
+    old.execute("INSERT INTO jobs (company, title, eligibility, first_seen, last_seen) "
+                "VALUES ('Muster GmbH', 'Alt', 'eligible', '2026-10-01', '2026-10-01')")
+    old.execute("INSERT INTO fit_scores (job_id, tier, reasoning, profile_hash, model, scored_at) "
+                "VALUES (1, 1, 'Alt.', 'p', 'm', '2026-10-01T08:00:00')")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    assert conn.execute("SELECT sorted_out FROM fit_scores").fetchone()[0] == 0
+    conn.close()
+
+
+def test_the_digest_names_the_sorted_out_jobs_of_the_day(conn, cfg, tmp_path):
+    off = add_job(conn, "Koch", first_seen=TODAY)
+    add_job(conn, "Sachbearbeiter", first_seen=TODAY)
+    counts = run_scoring(conn, cfg, ask=FakeAi(tier=1, sorted_out={off}))
+    text = digest.write_digest(conn, tmp_path, date.today(), counts)[0].read_text(encoding="utf-8")
+    assert "Von der KI aussortiert: 1" in text
+    assert "[Sachbearbeiter]" in text and "[Koch]" not in text
+    assert "2 neu bewertete Jobs" in text
+    other_day = digest.write_digest(conn, tmp_path, date(2026, 1, 1))[0].read_text(encoding="utf-8")
+    assert "aussortiert" not in other_day
