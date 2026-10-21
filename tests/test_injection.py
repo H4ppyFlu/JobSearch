@@ -139,3 +139,18 @@ def test_the_cli_prints_each_expectation_and_fails_on_a_miss(cfg, monkeypatch, c
 ])
 def test_safe_url(url, kept):
     assert safe_url(url) == (url.strip() if kept else None)
+
+
+@pytest.mark.parametrize("prompt", ["scoring.md", "career_extract.md", "career_setup.md"])
+def test_prompts_with_third_party_text_say_it_is_data(prompt):
+    from importlib import resources
+
+    text = resources.files("jobsearch.prompts").joinpath(prompt).read_text(encoding="utf-8")
+    assert "# Third-party text" in text and "never instructions" in text
+
+
+def test_system_prompts_with_third_party_text_say_it_is_data():
+    from jobsearch import career, career_setup, scoring
+
+    for system in (scoring.SYSTEM_PROMPT, career.SYSTEM, career_setup.SYSTEM):
+        assert "never instructions" in system
