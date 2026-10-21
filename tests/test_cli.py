@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from jobsearch.career import ScanCounts
-from jobsearch import db, usage
+from jobsearch import ai, db, usage
 from jobsearch.cli import career_summary, cmd_daily, cmd_status
 from jobsearch.config import ConfigError
 from tests.conftest import TERMS, TermsAi
@@ -80,3 +80,54 @@ def test_status_shows_the_ai_usage_of_the_last_seven_days(cfg, capsys):
                             output_tokens=400, cache_read_tokens=0, cache_creation_tokens=9000, cost_usd=cost))
     cmd_status(cfg)
     assert "KI-Verbrauch (7 Tage): 2 Aufrufe, API-Gegenwert 0.060 $" in capsys.readouterr().out
+
+
+class DailyAi:
+    """Answers the Search terms and the Weekly report; fails the report when asked to."""
+
+    def __init__(self, report_fail=None):
+        self.terms, self.report_fail = TermsAi(), report_fail
+        self.purposes = []
+
+    def __call__(self, prompt, *, purpose, model, schema, system, check=None, usage_recorder=None):
+        self.purposes.append(purpose)
+        if purpose == "search_terms":
+            return self.terms(prompt, purpose=purpose, model=model, schema=schema, system=system, check=check)
+        if self.report_fail:
+            raise ai.AiError(self.report_fail)
+        return ai.Answer({"summary": "Ruhige Woche.", "summary_evidence": ["stage.jobs.all"],
+                          "recommendations": [], "new_levers": []}, "claude-test")
+
+
+@pytest.fixture
+def toasts(monkeypatch):
+    shown = []
+    monkeypatch.setattr("jobsearch.cli.toast", lambda title, body, on_click=None: shown.append((body, on_click)))
+    return shown
+
+
+def test_daily_run_makes_the_weekly_report_when_due_and_toasts_it(cfg, toasts):
+    fake = DailyAi()
+    assert cmd_daily(cfg, score=True, career="off", client=RecordingClient(), ask=fake) == 0
+    assert fake.purposes.count("weekly_report") == 1
+    [(body, on_click)] = [t for t in toasts if "Wochenbericht" in t[0]]
+    assert "0 Empfehlungen" in body and on_click.endswith(".md")
+    fake = DailyAi()
+    cmd_daily(cfg, score=True, career="off", client=RecordingClient(), ask=fake)
+    assert "weekly_report" not in fake.purposes  # not due again the same week
+
+
+def test_a_failed_weekly_report_leaves_the_run_and_is_tried_again(cfg, toasts, capsys):
+    assert cmd_daily(cfg, score=True, career="off", client=RecordingClient(),
+                     ask=DailyAi(report_fail="Claude-Kontingent erschöpft")) == 0
+    assert "Wochenbericht fehlgeschlagen" in capsys.readouterr().err
+    assert (cfg.digests_dir / f"{date.today().isoformat()}.md").exists()
+    fake = DailyAi()
+    cmd_daily(cfg, score=True, career="off", client=RecordingClient(), ask=fake)
+    assert fake.purposes.count("weekly_report") == 1
+
+
+def test_no_weekly_report_without_scoring(cfg, toasts):
+    fake = DailyAi()
+    cmd_daily(cfg, score=False, career="off", client=RecordingClient(), ask=fake)
+    assert "weekly_report" not in fake.purposes

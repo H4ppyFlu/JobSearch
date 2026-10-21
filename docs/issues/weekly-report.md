@@ -1,6 +1,6 @@
 # Issue: Weekly report with recommendations
 
-Status: Parts 1 and 2 done (2026-10-21). Implement on branch `implement-weekly-report`.
+Status: Parts 1 to 3 done (2026-10-21). Implement on branch `implement-weekly-report`.
 
 ## Goal
 
@@ -66,7 +66,7 @@ The `summary` follows the same number rule, with its own `summary_evidence`; a `
 
 - `REPORT_INTERVAL_DAYS=7` in `config.py` and `.env.example`. `report_due(conn, today, interval_days)` is true when the last report without an error is that many days old or there is none.
 - The Daily run makes the report when due, after scoring, so the week's scores are in. A failed call is stored with its error, does not count as done and is tried again at the next run. It never blocks collection or the Digest.
-- The toast mentions a new report and opens the dashboard's report page.
+- The toast mentions a new report and opens its Markdown file. (Changed during implementation: the dashboard only runs when the candidate starts it, so a link to it could lead nowhere; the Digest toast opens its file the same way.)
 - Dashboard: a page "Bericht" with the newest report and a list of earlier ones, rendered from the database. The settings snapshot gains `report_prompt_hash`, so `eval --changes` shows prompt changes of the report too.
 
 ## Part 4: The loop (accept, reject, history)

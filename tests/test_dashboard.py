@@ -272,3 +272,33 @@ def test_list_shows_the_search_terms_per_job(client, conn):
     html = page(client)
     assert "<th class=\"hide-small\">Suchbegriff</th>" in html
     assert '<td class="hide-small">Projektingenieur, Simulation</td>' in html
+
+
+# --- Weekly report page --------------------------------------------------------------------------
+
+from datetime import date  # noqa: E402
+
+from jobsearch.report import make_report  # noqa: E402
+
+from .test_report import ReportAi, answer, rec, week_data  # noqa: E402
+
+
+def test_report_page_without_a_report(client):
+    assert "Noch kein Wochenbericht" in page(client, "/bericht")
+
+
+def test_report_page_shows_the_newest_report_and_lists_the_earlier_ones(client, conn, cfg):
+    week_data(conn, cfg)
+    make_report(conn, cfg, date(2026, 10, 14), ask=ReportAi(answer(summary="Alte Woche.")))
+    make_report(conn, cfg, date(2026, 10, 21), ask=ReportAi(answer(rec(), summary="Neue Woche.")))
+    html = page(client, "/bericht")
+    assert "Neue Woche." in html and "Alte Woche." not in html
+    assert "Suchbegriff abschalten" in html and "Planer" in html
+    assert "Suchbegriff &#39;Planer&#39;: ★" in html  # the evidence with its value
+    earlier = re.search(r'href="(/bericht/\d+)"[^>]*>[^<]*KW 42', html).group(1)
+    assert "Alte Woche." in page(client, earlier)
+    assert client.get("/bericht/999").status_code == 404
+
+
+def test_every_page_links_to_the_report(client):
+    assert 'href="/bericht"' in page(client)

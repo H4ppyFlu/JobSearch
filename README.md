@@ -113,11 +113,14 @@ A term you accept in the repo, for example a common technical word that is also 
 .venv\Scripts\python -m jobsearch eval --funnel  # where openings found elsewhere got lost
 .venv\Scripts\python -m jobsearch eval --changes  # when settings changed (prompt, Profile, Search terms, ...)
 .venv\Scripts\python -m jobsearch eval --usage  # AI usage: tokens and API equivalent per day, purpose and model
+.venv\Scripts\python -m jobsearch report [--dry-run]  # Weekly report now (1 AI call; otherwise weekly inside daily)
 .venv\Scripts\python -m jobsearch check-injection  # prompts against injected instructions (2 AI calls)
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again
 .venv\Scripts\python -m pytest             # tests, never touch the network
 ```
+
+The Weekly report is made by the Daily run once a week (`REPORT_INTERVAL_DAYS`), after scoring. Plain Python computes the pipeline's metrics (per stage, per active Search term, Fit score against Job status, found-elsewhere openings), each with an ID and the count it rests on; one AI call reads them and recommends up to five changes, each citing metric IDs. The AI writes no numbers: the report shows the values from the database, and a Recommendation whose text has a number its evidence does not back, that rests on too few Jobs, or whose target does not fit (a term that is not active, a word already excluded) is dropped and counted. The report lands in `data/reports/YYYY-Www.md`, on the dashboard page "Wochenbericht", and in a toast.
 
 The dashboard runs on `127.0.0.1` only and opens in the browser. It lists the Jobs with filters, marks those that are new since the last visit, and shows the full description, all Postings and the score reasoning per Job. Setting a Job status there can carry a Feedback note, and recent notes go into the next scoring prompt.
 

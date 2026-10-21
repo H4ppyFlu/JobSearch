@@ -335,3 +335,34 @@ def test_the_schema_offers_exactly_the_levers_in_code():
 
     lever = SCHEMA["properties"]["recommendations"]["items"]["properties"]["lever"]
     assert lever["enum"] == list(LEVERS) and set(LEVER_LABELS) == set(LEVERS)
+
+
+# --- When the report is due ----------------------------------------------------------------------
+
+from jobsearch.report import report_due  # noqa: E402
+
+
+def add_report(conn, period_end, answered=True, error=None):
+    with conn:
+        conn.execute("""INSERT INTO reports (created_at, period_start, period_end, answer_json, error)
+                        VALUES (?, ?, ?, ?, ?)""",
+                     (f"{period_end}T08:00:00", period_end, period_end, "{}" if answered else None, error))
+
+
+def test_report_is_due_without_any_report(conn):
+    assert report_due(conn, TODAY, 7)
+
+
+def test_report_is_due_once_the_last_finished_one_is_old_enough(conn):
+    add_report(conn, "2026-10-15")
+    assert not report_due(conn, TODAY, 7)
+    add_report(conn, "2026-10-14")
+    assert not report_due(conn, TODAY, 7)  # the newest one counts
+    assert report_due(conn, date(2026, 10, 22), 7)
+
+
+def test_failed_or_interrupted_reports_do_not_count(conn):
+    add_report(conn, "2026-10-10")
+    add_report(conn, "2026-10-20", answered=False, error="Claude-Kontingent erschöpft")
+    add_report(conn, "2026-10-21", answered=False)
+    assert report_due(conn, TODAY, 7)

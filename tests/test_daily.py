@@ -138,6 +138,7 @@ def test_daily_run_stores_what_was_in_effect(conn, cfg):
     settings = json.loads(conn.execute("SELECT settings_json FROM runs WHERE kind = 'daily'").fetchone()[0])
     assert settings["search_terms"] == ["anlagenbau", "Planer"]
     assert settings["prompt_scoring"] == prompts.version("scoring.md")
+    assert settings["prompt_weekly_report"] == prompts.version("weekly_report.md")
     assert settings["profile"] is None  # no Profile configured, the run still works
     assert settings["radius_km"] == 30 and settings["alert_mail"] is False
     assert "Werkstudent" not in json.dumps(settings)  # the exclusion list is kept as a hash only

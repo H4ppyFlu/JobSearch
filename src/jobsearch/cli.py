@@ -208,7 +208,24 @@ def cmd_daily(cfg: Config, score: bool, career: str = "auto", *, client=None, as
         warnings.extend(career_scan(cfg, conn, rules, targets))
     if score:
         status = max(status, cmd_score(cfg, conn, warnings=warnings))
+        weekly_report(cfg, conn, ask)
     return status
+
+
+def weekly_report(cfg: Config, conn, ask=ai.ask) -> None:
+    """The Weekly report when due, after scoring so the week's scores are in. A failure is stored with
+    the report and tried again at the next run; it never changes the run's outcome."""
+    from . import report
+
+    if not report.report_due(conn, date.today(), cfg.report_interval_days):
+        return
+    result = report.make_report(conn, cfg, date.today(), ask=ask)
+    if result.error:
+        print(f"Wochenbericht fehlgeschlagen, der nächste Lauf versucht es erneut: {result.error}", file=sys.stderr)
+        return
+    print(f"Wochenbericht: {result.path}")
+    toast("JobSearch", f"Wochenbericht: {result.counts.recommendations} Empfehlungen",
+          on_click=result.path.resolve().as_uri())
 
 
 def cmd_run(cfg: Config) -> int:

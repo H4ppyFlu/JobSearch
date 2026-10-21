@@ -114,6 +114,18 @@ _Avoid_: Cost, quota. In German output it is "KI-Verbrauch".
 The list price the same calls would cost through the API. The AI runs on the subscription, so it is neither a real cost nor a share of the quota.
 _Avoid_: Cost, price. In German output it is "API-Gegenwert".
 
+**Weekly report**:
+The weekly AI reading of the pipeline's own metrics, with a short assessment and up to five Recommendations. Every number in it comes from the database; the AI only cites metric IDs.
+_Avoid_: Analysis, summary. In German output it is "Wochenbericht".
+
+**Recommendation**:
+One proposed change to a Lever, backed by metric IDs, which the candidate accepts or rejects.
+_Avoid_: Suggestion, advice. In German output it is "Empfehlung".
+
+**Lever**:
+A setting that changes what a Stage lets through, from a fixed list in code: a Search term, the exclusion list, the radius, remote detection, the scoring prompt, the Profile, a career URL, or labelling more Jobs. The AI can propose new ones; only the candidate adds them.
+_Avoid_: Knob, parameter. In German output it is "Stellschraube".
+
 ### Trust
 
 **Third-party text**:

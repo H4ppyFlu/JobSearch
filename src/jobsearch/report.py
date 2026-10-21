@@ -348,6 +348,13 @@ def last_period_end(conn: sqlite3.Connection) -> str | None:
     return conn.execute("SELECT max(period_end) FROM reports WHERE answer_json IS NOT NULL").fetchone()[0]
 
 
+def report_due(conn: sqlite3.Connection, today: date, interval_days: int) -> bool:
+    """Due when the newest finished report looked at a week `interval_days` or more ago. A failed
+    report does not count, so it is tried again at the next run."""
+    last = last_period_end(conn)
+    return not last or (today - date.fromisoformat(last)).days >= interval_days
+
+
 def make_report(conn: sqlite3.Connection, cfg: Config, today: date, ask=ai.ask) -> ReportResult:
     """One AI call, the checks, the rows and the Markdown file. An AI failure is stored, never raised."""
     terms, exclusions = targets(conn, cfg)

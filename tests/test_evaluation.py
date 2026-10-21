@@ -39,6 +39,10 @@ def test_describe_names_each_changed_setting():
     ]
 
 
+def test_a_changed_report_prompt_has_a_german_name():
+    assert describe(BASE, {**BASE, "prompt_weekly_report": "rrr"}) == ["Prompt Wochenbericht: vorhanden"]
+
+
 def test_a_setting_added_later_shows_up_as_new():
     assert describe(BASE, {**BASE, "reopening_days": 21}) == ["Reopening nach (Tagen): – → 21"]
 

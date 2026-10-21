@@ -37,6 +37,7 @@ LABELS = {
     "prompt_scoring": "Prompt Bewertung",
     "prompt_career_extract": "Prompt Karriereseiten",
     "prompt_search_terms": "Prompt Suchbegriffe",
+    "prompt_weekly_report": "Prompt Wochenbericht",
     "profile": "Profil",
     "search_terms": "Suchbegriffe",
     "exclusions": "Ausschlussliste",
@@ -50,8 +51,8 @@ LABELS = {
     "feedback_notes_in_prompt": "Feedback notes im Prompt",
 }
 # Stored as hashes, so only "changed" can be said about them.
-HASHED = {"prompt_scoring", "prompt_career_extract", "prompt_search_terms", "profile", "exclusions",
-          "target_companies"}
+HASHED = {"prompt_scoring", "prompt_career_extract", "prompt_search_terms", "prompt_weekly_report", "profile",
+          "exclusions", "target_companies"}
 # Job status values that mean the candidate wanted the Job. Rejected is the company's decision.
 POSITIVE = ("interesting", "applied", "rejected")
 SOURCES = {"bundesagentur": "Bundesagentur", "indeed": "Alert-Mail", "career_page": "Karriereseiten"}

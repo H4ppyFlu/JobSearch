@@ -200,6 +200,24 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
         return render_template("job.html", job=job, postings=postings, description=description, score=score,
                                chain=reopening_chain(conn(), job_id), notes=notes, token=token, terms=terms)
 
+    @app.get("/bericht")
+    @app.get("/bericht/<int:report_id>")
+    def report_page(report_id: int | None = None):
+        from . import report
+
+        finished = conn().execute(
+            "SELECT id, period_end, created_at FROM reports WHERE answer_json IS NOT NULL ORDER BY id DESC").fetchall()
+        ids = [r["id"] for r in finished]
+        if report_id is None:
+            report_id = ids[0] if ids else None
+        elif report_id not in ids:
+            abort(404)
+        shown = report.load_report(conn(), report_id) if report_id else None
+        weeks = {r["id"]: date.fromisoformat(r["period_end"]).isocalendar() for r in finished}
+        created = {r["id"]: r["created_at"][:16].replace("T", " ") for r in finished}
+        return render_template("report.html", report=shown, weeks=weeks, created=created,
+                               LEVER_LABELS=report.LEVER_LABELS)
+
     @app.post("/job/<int:job_id>/status")
     def set_status(job_id: int):
         status = request.form.get("status", "")

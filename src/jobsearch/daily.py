@@ -219,6 +219,7 @@ def settings_snapshot(cfg: Config, targets: list[TargetCompany], rules: Rules, t
         "prompt_scoring": prompts.version("scoring.md"),
         "prompt_career_extract": prompts.version("career_extract.md"),
         "prompt_search_terms": prompts.version("search_terms.md"),
+        "prompt_weekly_report": prompts.version("weekly_report.md"),
         "profile": profile,
         "search_terms": sorted(terms, key=str.casefold),
         "exclusions": profile_hash("\n".join(sorted(rules.exclusions))),
