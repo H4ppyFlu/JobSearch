@@ -1,6 +1,6 @@
 # Issue: Market report (skill groups and active companies)
 
-Status: in progress on branch `implement-market-report`. Parts 1 to 4 done, review fixes in. Open: the candidate's plausibility check.
+Status: done (2026-10-21), merged into `main`.
 
 ## Goal
 

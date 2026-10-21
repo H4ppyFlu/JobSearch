@@ -79,7 +79,7 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
   - "davon positiv" and "davon geringe Sicherheit" now count only the Jobs that miss the group (the candidate's decision) and stand next to "fehlt". "ohne Gruppe" says it counts texts over all periods. `--since` after `--until` is refused before any AI call.
   - `group_skills()` looks up `ai.ask` per call, so a patched `ai.ask` in tests is seen. `evaluation.table()` is public and shared with `market`, which also reuses `evaluation.STARS` and one query for the ★★/★★★ Jobs. Test examples use a made-up tool name instead of a real product.
   - `check-injection` was not run: the issue keeps the skill grouping out of it, since the worst outcome is a wrong group and the code checks the mapping. `test_injection.py` checks that `skill_groups.md` and its system prompt carry the "Third-party text" rule.
-- **Open for the user (Market report):** look at the top Skill groups and the Active companies (`jobsearch market` or the dashboard page "Markt") and say whether they are plausible; that is the issue's last "Done when" point.
+- **Market report done** (2026-10-21). The candidate found the top Skill groups and the Active companies plausible, the last "Done when" point.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
