@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 from . import ai
 from .companies import normalize_company
+from .sources import is_web_url
 
 log = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ def run_setup(path: Path, *, model: str, ask=ai.ask, recheck: dict[str, str] | N
             info = found[i]
             if info["note"]:
                 result.notes.append(f"{row['name']}: {info['note']}")
-            if not _acceptable(info["career_url"]):
+            if not _is_https_url(info["career_url"]):
                 result.not_found.append(row["name"])
                 continue
             if not _domain_fits(row["name"], info["career_url"]):
@@ -134,10 +135,9 @@ def run_setup(path: Path, *, model: str, ask=ai.ask, recheck: dict[str, str] | N
     return result
 
 
-def _acceptable(url: str) -> bool:
+def _is_https_url(url: str) -> bool:
     """The setup browses pages written by strangers, so its answer is checked before it is stored."""
-    parts = urlparse(url)
-    return parts.scheme == "https" and bool(parts.hostname)
+    return is_web_url(url) and urlparse(url).scheme == "https"
 
 
 def _domain_fits(company: str, url: str) -> bool:

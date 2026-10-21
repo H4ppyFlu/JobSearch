@@ -82,6 +82,9 @@ def render(report: DayReport, scoring: ScoreCounts | None = None, warnings: list
     lines.append(f"{total} neu bewertete Jobs in Reichweite. Warten auf Bewertung: {report.backlog}.")
     if scoring and scoring.error:
         lines += ["", f"> ⚠️ Die Bewertung ist fehlgeschlagen: {scoring.error}"]
+    if scoring and scoring.injection_suspected:
+        lines += ["", f"> ⚠️ {scoring.injection_suspected} Stellenanzeige(n) mit möglichen Anweisungen an die KI, "
+                      "trotzdem normal bewertet. Job-Nummern im Log."]
     for warning in warnings:
         lines += ["", f"> ⚠️ {warning}"]
     for tier in (3, 2):

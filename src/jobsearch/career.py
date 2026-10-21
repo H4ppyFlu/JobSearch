@@ -27,7 +27,7 @@ from .config import Config
 from .daily import Counts, locate, store_postings
 from .eligibility import Rules
 from .matching import JobIndex
-from .sources import Location, Posting, is_local_host
+from .sources import Location, Posting, is_local_host, is_web_url
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ MAX_DESCRIPTION_CHARS = 20_000
 MIN_DESCRIPTION_CHARS = 300  # less is an app shell or an error page, not a job ad
 _TRACKING = re.compile(r"^(utm_.*|sid|session.*|src|source|ref|referrer|trk|tracking.*|gclid|fbclid|mc_.*)$", re.I)
 REPORT_AFTER = 2  # scans in a row that failed or found nothing
+MAX_REDIRECTS = 5
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) JobSearch/0.1 (personal job search, weekly)"
 # Almost every German job title carries one. A page without any shows no job list in its HTML.
 JOB_MARKER = re.compile(r"\((?:[mwfdx*]\s*[/|,]\s*){1,3}[mwfdx*]\)|\(all genders?\)|\(gn\*?\)", re.IGNORECASE)
@@ -119,22 +120,48 @@ class FetchError(Exception):
     """A page could not be fetched. The message is German, for the report."""
 
 
+def _check_fetchable(url: str) -> None:
+    """URLs can come from the AI (extracted links, career setup), so only public web pages are fetched."""
+    if not is_web_url(url):
+        raise FetchError(f"nicht abgerufen: keine gültige http(s)-Adresse ({url[:80]})")
+    host = urlparse(url).hostname or ""
+    if is_local_host(host):
+        raise FetchError(f"nicht abgerufen: lokale Adresse {host}")
+
+
 def fetch_page(url: str, render_mode: str = "static") -> str:
-    # The URL can come from the AI (extracted links, career setup), so only public web pages are fetched
-    parts = urlparse(url)
-    if parts.scheme not in ("http", "https"):
-        raise FetchError(f"nicht abgerufen: nur http(s)-Adressen, nicht {parts.scheme or 'ohne Schema'}")
-    if is_local_host(parts.hostname or ""):
-        raise FetchError(f"nicht abgerufen: lokale Adresse {parts.hostname}")
+    _check_fetchable(url)
     if render_mode == "browser":
         return _fetch_rendered(url)
+    # Redirects are followed by hand, so each target is checked before it is requested
+    for _ in range(MAX_REDIRECTS + 1):
+        try:
+            response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30, allow_redirects=False)
+        except requests.RequestException as e:
+            raise FetchError(f"nicht erreichbar ({e.__class__.__name__})") from None
+        if response.status_code in (301, 302, 303, 307, 308) and response.headers.get("Location"):
+            url = urljoin(url, response.headers["Location"])
+            _check_fetchable(url)
+            continue
+        if response.status_code != 200:
+            raise FetchError(f"HTTP {response.status_code}")
+        return response.text
+    raise FetchError(f"zu viele Weiterleitungen (mehr als {MAX_REDIRECTS})")
+
+
+def _guard_route(route) -> None:
+    """Playwright route handler: the page and everything it loads may only reach public web hosts.
+    data: and blob: stay allowed, since they never leave the browser."""
+    url = route.request.url
+    if url.startswith(("data:", "blob:")):
+        route.continue_()
+        return
     try:
-        response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
-    except requests.RequestException as e:
-        raise FetchError(f"nicht erreichbar ({e.__class__.__name__})") from None
-    if response.status_code != 200:
-        raise FetchError(f"HTTP {response.status_code}")
-    return response.text
+        _check_fetchable(url)
+    except FetchError:
+        route.abort()
+        return
+    route.continue_()
 
 
 def _fetch_rendered(url: str) -> str:
@@ -148,6 +175,7 @@ def _fetch_rendered(url: str) -> str:
             browser = p.chromium.launch()
             try:
                 page = browser.new_page(user_agent=USER_AGENT)
+                page.route("**/*", _guard_route)
                 page.goto(url, wait_until="networkidle", timeout=60_000)
                 return page.content()
             finally:
@@ -169,7 +197,9 @@ class ScanCounts:
     places_unknown: int = 0
     description_failures: int = 0
     ungrounded: int = 0  # extracted items dropped because the page text does not show them
-    warnings: list[str] = field(default_factory=list)  # pages failing or empty REPORT_AFTER times in a row
+    injection_suspected: int = 0  # pages the model flagged as addressing it
+    # Pages failing or empty REPORT_AFTER times in a row, and pages flagged for prompt injection
+    warnings: list[str] = field(default_factory=list)
     error: str | None = None  # the AI step failed; those pages are tried again next time
 
 
@@ -181,6 +211,11 @@ class _Page:
 
 
 Fetch = Callable[..., str]
+
+
+def extraction_page(company: TargetCompany, page: PageText) -> _Page:
+    """A page as the extraction model sees it, cut to MAX_PAGE_CHARS."""
+    return _Page(company, page.text[:MAX_PAGE_CHARS], page.hash)
 
 
 def personio(company: TargetCompany, fetch: Fetch) -> list[Posting]:
@@ -289,6 +324,7 @@ SCHEMA = {
                 "type": "object",
                 "properties": {
                     "page_id": {"type": "integer"},
+                    "injection_suspected": {"type": "boolean"},
                     "postings": {
                         "type": "array",
                         "items": {
@@ -304,7 +340,7 @@ SCHEMA = {
                         },
                     },
                 },
-                "required": ["page_id", "postings"],
+                "required": ["page_id", "postings", "injection_suspected"],
                 "additionalProperties": False,
             },
         }
@@ -482,7 +518,7 @@ def run_career_scan(conn: sqlite3.Connection, cfg: Config, companies: list[Targe
                     _refresh_unchanged(conn, company, state["last_changed"] or day, day)
                     _warn(_record(conn, company, day), counts)
                 continue
-            changed.append(_Page(company, page.text[:MAX_PAGE_CHARS], page.hash))
+            changed.append(extraction_page(company, page))
 
         for batch in _batches(changed):
             try:
@@ -493,13 +529,21 @@ def run_career_scan(conn: sqlite3.Connection, cfg: Config, companies: list[Targe
                 counts.error = str(e)
                 break  # the hashes stay old, so these pages are extracted next time
             counts.extracted += len(batch)
-            found = {p["page_id"]: p["postings"] for p in answer.data["pages"]}
+            answers = {p["page_id"]: p for p in answer.data["pages"]}
             for i, page in enumerate(batch):
-                postings = [_posting(page.company, item) for item in _grounded_items(page, found[i], counts)]
+                if answers[i]["injection_suspected"]:  # a signal for a human look; the Postings are kept
+                    counts.injection_suspected += 1
+                    log.warning("Career page of %s may contain instructions to the AI (prompt injection)",
+                                page.company.name)
+                items = _grounded_items(page, answers[i]["postings"], counts)
+                postings = [_posting(page.company, item) for item in items]
                 _store(conn, cfg, companies, rules, postings, gazetteer, index, today, counts)
                 with conn:
                     _warn(_record(conn, page.company, day, content_hash=page.hash, found=len(postings)), counts)
 
+        if counts.injection_suspected:
+            counts.warnings.append(f"Karriereseiten: {counts.injection_suspected} Seite(n) mit möglichen Anweisungen "
+                                   "an die KI. Firmen im Log.")
         fetch_descriptions(conn, fetch, day, counts)
     except Exception as e:
         db.finish_run(conn, run_id, False, json.dumps(counts.__dict__, ensure_ascii=False), repr(e))

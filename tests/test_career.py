@@ -72,8 +72,8 @@ class FakeFetch:
 class ExtractAi:
     """Returns the given postings per company found in the prompt."""
 
-    def __init__(self, postings, fail=None):
-        self.postings, self.fail = postings, fail
+    def __init__(self, postings, fail=None, suspected=()):
+        self.postings, self.fail, self.suspected = postings, fail, set(suspected)
         self.calls = 0
 
     def __call__(self, prompt, *, model, schema, system, check=None, tools=()):
@@ -81,8 +81,8 @@ class ExtractAi:
         if self.fail:
             raise ai.AiError(self.fail)
         pages = json.loads(prompt.split("# Pages\n\n", 1)[1])
-        data = {"pages": [{"page_id": p["page_id"], "postings": self.postings.get(p["company"], [])}
-                          for p in pages]}
+        data = {"pages": [{"page_id": p["page_id"], "postings": self.postings.get(p["company"], []),
+                           "injection_suspected": p["company"] in self.suspected} for p in pages]}
         check(data)
         return ai.Answer(data, "claude-haiku-test")
 
@@ -327,3 +327,91 @@ def test_fetch_page_refuses_local_and_non_web_urls_before_any_request(url, rende
     monkeypatch.setattr("jobsearch.career._fetch_rendered", no_request)
     with pytest.raises(FetchError, match="nicht abgerufen"):
         fetch_page(url, render_mode)
+
+
+def test_a_page_flagged_for_injection_is_counted_logged_and_warned_about(conn, cfg, caplog):
+    fetch = FakeFetch({"https://muster.example/karriere": PAGE, "https://muster.example/jobs/1": "<p>Text</p>"})
+    with caplog.at_level(logging.WARNING, logger="jobsearch.career"):
+        counts = scan(conn, cfg, TARGETS, fetch,
+                      ExtractAi({"Muster Industrie GmbH": [JOB]}, suspected={"Muster Industrie GmbH"}))
+    assert counts.injection_suspected == 1 and counts.new_jobs == 1  # a signal, the Postings are kept
+    assert any("Muster Industrie GmbH" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
+    assert any("Anweisungen an die KI" in w for w in counts.warnings)
+
+
+def test_an_unflagged_scan_has_no_injection_warning(conn, cfg):
+    fetch = FakeFetch({"https://muster.example/karriere": PAGE, "https://muster.example/jobs/1": "<p>Text</p>"})
+    counts = scan(conn, cfg, TARGETS, fetch, ExtractAi({"Muster Industrie GmbH": [JOB]}))
+    assert counts.injection_suspected == 0 and counts.warnings == []
+
+
+class FakeResponse:
+    def __init__(self, status=200, text="", location=None):
+        self.status_code, self.text = status, text
+        self.headers = {"Location": location} if location else {}
+
+
+def fake_get(responses, calls):
+    def get(url, **kwargs):
+        calls.append((url, kwargs.get("allow_redirects")))
+        return responses[url]
+    return get
+
+
+def test_a_malformed_url_is_refused_instead_of_raising(monkeypatch):
+    monkeypatch.setattr("jobsearch.career.requests.get", lambda *a, **k: pytest.fail("no request expected"))
+    with pytest.raises(FetchError, match="nicht abgerufen"):
+        fetch_page("http://[::1")
+
+
+def test_a_redirect_to_a_local_address_is_refused_before_it_is_followed(monkeypatch):
+    calls = []
+    monkeypatch.setattr("jobsearch.career.requests.get", fake_get(
+        {"https://blumen.example/jobs": FakeResponse(302, location="http://127.0.0.1:8765/admin")}, calls))
+    with pytest.raises(FetchError, match="lokale Adresse"):
+        fetch_page("https://blumen.example/jobs")
+    assert calls == [("https://blumen.example/jobs", False)]
+
+
+def test_a_public_redirect_is_followed(monkeypatch):
+    calls = []
+    monkeypatch.setattr("jobsearch.career.requests.get", fake_get({
+        "https://blumen.example/jobs": FakeResponse(301, location="/karriere/stellen"),
+        "https://blumen.example/karriere/stellen": FakeResponse(200, text="<p>Stellen</p>"),
+    }, calls))
+    assert fetch_page("https://blumen.example/jobs") == "<p>Stellen</p>"
+    assert [url for url, _ in calls] == ["https://blumen.example/jobs", "https://blumen.example/karriere/stellen"]
+
+
+def test_endless_redirects_stop(monkeypatch):
+    calls = []
+    monkeypatch.setattr("jobsearch.career.requests.get", fake_get(
+        {"https://blumen.example/a": FakeResponse(302, location="https://blumen.example/a")}, calls))
+    with pytest.raises(FetchError, match="Weiterleitungen"):
+        fetch_page("https://blumen.example/a")
+    assert len(calls) <= 6
+
+
+class FakeRoute:
+    def __init__(self, url):
+        self.request = type("Request", (), {"url": url})()
+        self.outcome = None
+
+    def abort(self):
+        self.outcome = "abort"
+
+    def continue_(self):
+        self.outcome = "continue"
+
+
+@pytest.mark.parametrize("url, outcome", [
+    ("https://blumen.example/app.js", "continue"), ("http://127.0.0.1:8765/", "abort"),
+    ("http://192.168.1.1/api", "abort"), ("file:///C:/Windows/win.ini", "abort"),
+    ("data:image/png;base64,AAAA", "continue"), ("blob:https://blumen.example/x", "continue"),
+])
+def test_the_browser_blocks_every_request_to_a_local_address(url, outcome):
+    from jobsearch.career import _guard_route
+
+    route = FakeRoute(url)
+    _guard_route(route)
+    assert route.outcome == outcome

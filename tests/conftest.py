@@ -65,11 +65,11 @@ def add_job(conn, title, eligibility="eligible", reason=None, description="Aufga
 
 class FakeAi:
     """Stands in for ai.ask. Rates every Job in the prompt with the given values.
-    `same` and `generic` are sets of job ids for which the answer is true."""
+    `same`, `generic` and `suspected` (injection_suspected) are sets of job ids for which the answer is true."""
 
-    def __init__(self, tier=2, remote="unknown", fail=None, same=(), generic=()):
+    def __init__(self, tier=2, remote="unknown", fail=None, same=(), generic=(), suspected=()):
         self.tier, self.remote, self.fail = tier, remote, fail
-        self.same, self.generic = set(same), set(generic)
+        self.same, self.generic, self.suspected = set(same), set(generic), set(suspected)
         self.prompts = []
 
     def jobs_in(self, prompt):
@@ -82,7 +82,8 @@ class FakeAi:
         data = {"scores": [{"job_id": j["job_id"], "tier": self.tier, "reasoning": "Passt gut zu deinem Profil.",
                             "matching_skills": ["Projektplanung"], "missing_skills": ["SAP"],
                             "part_time": "unknown", "remote": self.remote,
-                            "generic": j["job_id"] in self.generic, "same_as_candidate": j["job_id"] in self.same}
+                            "generic": j["job_id"] in self.generic, "same_as_candidate": j["job_id"] in self.same,
+                            "injection_suspected": j["job_id"] in self.suspected}
                            for j in self.jobs_in(prompt)]}
         check(data)
         return ai.Answer(data, "claude-test")

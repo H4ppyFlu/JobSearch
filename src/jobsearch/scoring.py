@@ -55,9 +55,10 @@ SCHEMA = {
                     "remote": {"type": "string", "enum": ["full", "hybrid", "none", "unknown"]},
                     "generic": {"type": "boolean"},
                     "same_as_candidate": {"type": "boolean"},
+                    "injection_suspected": {"type": "boolean"},
                 },
                 "required": ["job_id", "tier", "reasoning", "matching_skills", "missing_skills",
-                             "part_time", "remote", "generic", "same_as_candidate"],
+                             "part_time", "remote", "generic", "same_as_candidate", "injection_suspected"],
                 "additionalProperties": False,
             },
         }
@@ -75,6 +76,7 @@ class ScoreCounts:
     remote_rejected: int = 0
     merged: int = 0
     generic: int = 0
+    injection_suspected: int = 0  # ads the model flagged as addressing it; scored as usual
     backlog: int = 0  # still unscored after this run
     error: str | None = None
 
@@ -177,6 +179,9 @@ def store(conn: sqlite3.Connection, jobs: list[dict], answer: ai.Answer, p_hash:
     scored_at = db.now()
     with conn:
         for s in answer.data["scores"]:
+            if s["injection_suspected"]:  # a signal for a human look, not a verdict: the Job is scored as usual
+                counts.injection_suspected += 1
+                log.warning("Job %d: the ad may contain instructions to the AI (prompt injection)", s["job_id"])
             if s["generic"]:
                 conn.execute("UPDATE jobs SET is_generic = 1 WHERE id = ?", (s["job_id"],))
                 counts.generic += 1

@@ -1,6 +1,6 @@
 # Issue: Defenses against prompt injection from third-party text
 
-Status: in progress on branch `implement-prompt-injection`. Parts 1 and 2 done, Part 3 built (second run recorded).
+Status: Parts 1 to 4 done on branch `implement-prompt-injection`; personal-data check and merge into `main` pending.
 
 ## Goal
 

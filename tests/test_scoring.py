@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import logging
 from datetime import date
 
 import pytest
@@ -133,3 +134,22 @@ def test_each_fit_score_stores_the_prompt_version(conn, cfg):
     add_job(conn, "Sachbearbeiter")
     run_scoring(conn, cfg, ask=FakeAi())
     assert conn.execute("SELECT prompt_hash FROM fit_scores").fetchone()[0] == prompts.version("scoring.md")
+
+
+def test_a_job_flagged_for_injection_is_scored_counted_and_logged(conn, cfg, caplog):
+    flagged = add_job(conn, "Gärtnermeister", first_seen=TODAY)
+    add_job(conn, "Konditor", first_seen=TODAY)
+    with caplog.at_level(logging.WARNING, logger="jobsearch.scoring"):
+        counts = run_scoring(conn, cfg, ask=FakeAi(suspected={flagged}))
+    assert counts.injection_suspected == 1 and counts.scored == 2
+    assert any(f"Job {flagged}" in r.getMessage() and r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_the_digest_warns_once_when_scoring_flagged_something(conn, cfg, tmp_path):
+    flagged = add_job(conn, "Gärtnermeister", first_seen=TODAY)
+    counts = run_scoring(conn, cfg, ask=FakeAi(suspected={flagged}))
+    text = digest.write_digest(conn, tmp_path / "digests", date.today(), counts)[0].read_text(encoding="utf-8")
+    assert text.count("Anweisungen an die KI") == 1
+    clean = run_scoring(conn, cfg, ask=FakeAi())
+    assert "Anweisungen an die KI" not in digest.render(digest.DayReport(date.today(), {1: [], 2: [], 3: []}, [], 0),
+                                                         clean)
