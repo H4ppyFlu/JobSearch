@@ -1,6 +1,6 @@
 # Issue: Weekly report with recommendations
 
-Status: Parts 1 to 4 built (2026-10-21); the live "Done when" waits for the candidate's first decision. Implement on branch `implement-weekly-report`.
+Status: done (2026-10-21), merged into `main`. Still open: the live "Done when" (an accepted Recommendation that changes a file, seen in `eval --changes` after the next Daily run); so far the candidate has only rejected. Implement on branch `implement-weekly-report`.
 
 ## Goal
 
