@@ -83,6 +83,10 @@ class Config:
         return self.data_dir / "digests"
 
     @property
+    def reports_dir(self) -> Path:
+        return self.data_dir / "reports"
+
+    @property
     def geo_path(self) -> Path:
         return self.data_dir / "geo" / "places.tsv"
 

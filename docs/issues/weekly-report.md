@@ -1,6 +1,6 @@
 # Issue: Weekly report with recommendations
 
-Status: Part 1 done (2026-10-21). Implement on branch `implement-weekly-report`.
+Status: Parts 1 and 2 done (2026-10-21). Implement on branch `implement-weekly-report`.
 
 ## Goal
 
@@ -26,7 +26,7 @@ Four rules shape the design:
 ## Part 1: Report input (metrics with IDs, no AI)
 
 - New module `src/jobsearch/report.py`. A pure function `report_input(conn, today) -> ReportInput` builds everything the AI will see, from the existing `evaluation.py` functions:
-  - the last 7 days and the whole history side by side: stage metrics, metrics per Search term, tier × label table, funnel stages of `found_elsewhere.csv` (counts per stage only);
+  - the last 7 days and the whole history side by side: stage metrics, metrics per active Search term, tier × label table, funnel stages of `found_elsewhere.csv` (counts per stage only);
   - the settings changes since the last report (`changes()`; since the first snapshot when there is no report yet).
 - Every metric is a `Metric(id, value, n, label)`: a stable dotted ID (for example `term.<term>.jobs.7d`, `stage.ineligible.<reason kind>.all`, `score.tier3.precision.all`), its value, the count it rests on (`n`) and a German label for the report. IDs must be unique. Search terms in IDs are slugified, and the mapping back to the real term is kept for the target check in Part 2.
 - `ReportInput.to_prompt_json()` gives the JSON for the prompt. Nothing else from the database goes in.
@@ -52,7 +52,7 @@ A Recommendation or Lever idea is dropped, logged at INFO with the reason, and c
 - its `action`, `what` or `why` contains a number (digits, also as part of `50%` or `3,5`) that is not the value of one of its own `evidence` metrics. The text should not need numbers at all; the report shows the values next to the item;
 - `target` does not fit the Lever: `search_term_off` must name an active Search term, `exclusion` must not already be on the list, `search_term_new` must not already be active.
 
-The `summary` follows the same number rule; a `summary` that breaks it is replaced by a German note that the assessment was dropped. Counts go into `ReportCounts` (`recommendations`, `dropped`, `new_levers`) and into the report row.
+The `summary` follows the same number rule, with its own `summary_evidence`; a `summary` that breaks it is replaced by a German note that the assessment was dropped. Decided during implementation: `label_more` is exempt from `MIN_EVIDENCE_N` (too few labels is exactly when it is right); numbers that are part of the `target` are allowed; names of tiers and the week ("Stufe 3", "Tier 2", "3 Sterne", "7 Tage") are not counted as numbers; a term may be named by its slug. Counts go into `ReportCounts` (`recommendations`, `dropped`, `new_levers`) and into the report row.
 
 ### Storage and output
 

@@ -59,6 +59,10 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
   - A few hundred metrics, most of them per Search term (14 each). Metrics with `n = 0` are left out, except a term's Job count, since a term that finds nothing is a finding. Together with compact JSON this cut the input by about a third, to roughly 40,000 characters for one call a week.
   - All IDs were unique; two terms that slug alike get `-2`.
   - The funnel never sends the titles or companies of the found-elsewhere entries, and no metric carries text from job ads; a test checks this.
+- **Weekly report Part 2 done** (2026-10-21). Prompt `weekly_report.md`, schema built from `LEVERS`, `report.check_answer()` (unknown metric IDs, evidence below `MIN_EVIDENCE_N`, numbers not backed by the item's own evidence, targets that do not fit their Lever, more than five Recommendations or two Lever ideas), migration 008 (`reports`, `recommendations`), `data/reports/YYYY-Www.md` and `jobsearch report [--dry-run]`. Findings from two live reports on the real database:
+  - The first one kept one Recommendation out of five and dropped the summary. Two causes, both in the design, not in the model: the input carried metrics of Search terms that are no longer active (old derived sets, switched-off terms), and the model was told to switch two of them off, which the target check rightly refused; and the number rule caught tier names ("Stufe 3"), which the metric labels themselves had modelled ("1 Sterne").
+  - Fixes: metrics per Search term only for active terms; labels and prompt name tiers ★, ★★, ★★★; tier names and "7 Tage" are not counted as numbers.
+  - The second report dropped nothing: a summary and five Recommendations, every one backed by metrics with a solid `n`, and their texts without numbers. With the database younger than a week, the 7-day and whole-history metrics were still the same, which the summary said itself.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)

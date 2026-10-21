@@ -234,6 +234,26 @@ def cmd_run(cfg: Config) -> int:
     return status
 
 
+def cmd_report(cfg: Config, dry_run: bool = False, ask=ai.ask) -> int:
+    """The Weekly report now. --dry-run prints what the AI would get, without calling it."""
+    from . import report
+
+    conn = db.connect(cfg.db_path)
+    if dry_run:
+        terms, _ = report.targets(conn, cfg)
+        print(report.report_input(conn, date.today(), cfg.found_elsewhere_path, report.last_period_end(conn),
+                                  terms).to_prompt_json())
+        return 0
+    print("Wochenbericht: 1 Aufruf an Claude ...")
+    result = report.make_report(conn, cfg, date.today(), ask=ask)
+    if result.error:
+        print(f"Wochenbericht fehlgeschlagen: {result.error}", file=sys.stderr)
+        return 1
+    print(result.path.read_text(encoding="utf-8"))
+    print(f"Gespeichert: {result.path}")
+    return 0
+
+
 def cmd_install_task(cfg: Config) -> int:
     try:
         scheduler.install_task(cfg.root)
@@ -381,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
     sub.add_parser("check-injection", help="Prompts gegen eingeschleuste Anweisungen prüfen (2 KI-Aufrufe)")
+    report = sub.add_parser("report", help="Wochenbericht mit Empfehlungen jetzt erstellen (1 KI-Aufruf)")
+    report.add_argument("--dry-run", action="store_true", help="Nur die Eingabe für die KI zeigen, ohne Aufruf")
     evaluate = sub.add_parser("eval", help="Auswertung der gespeicherten Läufe (ohne KI)")
     evaluate.add_argument("--changes", action="store_true", help="Wann sich die Einstellungen geändert haben")
     evaluate.add_argument("--since", type=date.fromisoformat, help="Erster Tag (JJJJ-MM-TT)")
@@ -405,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
             cmd_init(cfg)
         elif args.command == "status":
             cmd_status(cfg)
-        elif args.command in ("daily", "score", "career-scan"):
+        elif args.command in ("daily", "score", "career-scan", "report"):
             # The same lock as the scheduled run, so a manual run never overlaps it.
             with scheduler.RunLock(cfg.data_dir / "run.lock") as held:
                 if not held:
@@ -415,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
                     return cmd_daily(cfg, score=not args.no_score, career=args.career)
                 if args.command == "career-scan":
                     return cmd_career_scan(cfg)
+                if args.command == "report":
+                    return cmd_report(cfg, args.dry_run)
                 return cmd_score(cfg, db.connect(cfg.db_path), args.limit)
         elif args.command == "run":
             return cmd_run(cfg)

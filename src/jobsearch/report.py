@@ -9,16 +9,22 @@ no text from job ads, so this call has no Third-party text.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from importlib import resources
 from pathlib import Path
 
-from .config import ConfigError
-from .evaluation import (SOURCES, STAGES, Change, Period, Trace, changes, read_found, score_tables, snapshots,
+from . import ai, config, db, prompts
+from .config import Config, ConfigError
+from .evaluation import (SOURCES, STAGES, STARS, Change, Period, Trace, changes, read_found, score_tables, snapshots,
                          stage_metrics, term_metrics, trace)
+from .search_terms import active_terms, derived_terms
+
+log = logging.getLogger(__name__)
 
 _UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
 
@@ -84,20 +90,25 @@ def _stages(inp: ReportInput, conn: sqlite3.Connection, key: str, name: str, per
                 f"Ineligible wegen {reason} ({name})")
     inp.add(f"stage.generic.{key}", s.generic, s.jobs, f"Sammelanzeigen ({name})")
     for tier in (3, 2, 1):
-        inp.add(f"stage.tier{tier}.{key}", s.tiers[tier], s.scored, f"Bewertet mit {tier} Sternen ({name})")
+        inp.add(f"stage.tier{tier}.{key}", s.tiers[tier], s.scored, f"Bewertet mit {STARS[tier]} ({name})")
     inp.add(f"stage.low_confidence.{key}", s.low_confidence, s.scored, f"Geringe Sicherheit ({name})")
     inp.add(f"stage.unscored.{key}", s.unscored, s.eligibility["eligible"], f"Eligible, noch unbewertet ({name})")
 
 
-def _terms(inp: ReportInput, conn: sqlite3.Connection, key: str, name: str, period: Period) -> None:
+def _terms(inp: ReportInput, conn: sqlite3.Connection, key: str, name: str, period: Period,
+           active: set[str]) -> None:
+    """Only active terms: a term that is no longer searched cannot be switched off, and its history
+    would only cost tokens."""
     for t in term_metrics(conn, period):
+        if t.term.casefold() not in active:
+            continue
         prefix, label = f"term.{inp.term_slug(t.term)}", f"Suchbegriff '{t.term}'"
         inp.add(f"{prefix}.jobs.{key}", t.jobs, t.jobs, f"{label}: Jobs ({name})", keep_empty=True)
         inp.add(f"{prefix}.only_here.{key}", t.only_here, t.jobs, f"{label}: nur von diesem Begriff gefunden ({name})")
         inp.add(f"{prefix}.eligible.{key}", t.eligible, t.jobs, f"{label}: eligible ({name})")
         scored = sum(t.tiers.values())
         for tier in (3, 2, 1):
-            inp.add(f"{prefix}.tier{tier}.{key}", t.tiers[tier], scored, f"{label}: {tier} Sterne ({name})")
+            inp.add(f"{prefix}.tier{tier}.{key}", t.tiers[tier], scored, f"{label}: {STARS[tier]} ({name})")
         inp.add(f"{prefix}.positive.{key}", t.positive, t.jobs, f"{label}: positiver Job status ({name})")
 
 
@@ -112,14 +123,14 @@ def _scores(inp: ReportInput, conn: sqlite3.Connection, key: str, name: str, per
         in_tier = sum(t[(tier, lab)] for lab in _LABELS)
         for lab, german in _LABELS.items():
             inp.add(f"score.tier{tier}.{lab or 'unlabeled'}.{key}", t[(tier, lab)], in_tier,
-                    f"{tier} Sterne, Job status {german} ({name})")
+                    f"{STARS[tier]}, Job status {german} ({name})")
     top_labeled = t[(3, "positive")] + t[(3, "negative")]
     if top_labeled:
         inp.add(f"score.tier3.precision.{key}", round(100 * t[(3, "positive")] / top_labeled), top_labeled,
-                f"Treffsicherheit 3 Sterne in Prozent ({name})")
+                f"Treffsicherheit ★★★ in Prozent ({name})")
     positives = sum(t[(tier, "positive")] for tier in (3, 2, 1))
     inp.add(f"score.missed_in_tier1.{key}", t[(1, "positive")], positives,
-            f"Positive Jobs, die nur 1 Stern bekamen ({name})")
+            f"Positive Jobs, die nur ★ bekamen ({name})")
     inp.add(f"score.labeled.{key}", positives + sum(t[(tier, "negative")] for tier in (3, 2, 1)),
             sum(t.values()), f"Bewertete Jobs mit Label ({name})")
 
@@ -141,14 +152,333 @@ def _funnel(inp: ReportInput, traces: list[Trace], key: str, name: str, period: 
         inp.add(f"funnel.{stage}.{key}", n, len(traces), f"Fremdfunde: {STAGES[stage][0]} ({name})")
 
 
-def report_input(conn: sqlite3.Connection, today: date, found_path: Path, last_report_at: str | None) -> ReportInput:
+def report_input(conn: sqlite3.Connection, today: date, found_path: Path, last_report_at: str | None,
+                 active_terms: list[str]) -> ReportInput:
     inp = ReportInput()
+    active = {t.casefold() for t in active_terms}
     since = last_report_at[:10] if last_report_at else ""
     inp.changes = [c for c in changes(snapshots(conn)) if c.day >= since]
     traces = _traces(conn, found_path)
     for key, name, period in reversed(_periods(today)):  # the whole history first, so slugs follow its order
         _stages(inp, conn, key, name, period)
-        _terms(inp, conn, key, name, period)
+        _terms(inp, conn, key, name, period, active)
         _scores(inp, conn, key, name, period)
         _funnel(inp, traces, key, name, period)
     return inp
+
+
+# --- The answer ----------------------------------------------------------------------------------
+
+# Settings a Recommendation can change. The schema's enum is built from this list.
+LEVERS = ("search_term_off", "search_term_new", "exclusion", "radius", "remote_phrase", "scoring_prompt",
+          "profile", "career_url", "label_more")
+LEVER_LABELS = {"search_term_off": "Suchbegriff abschalten", "search_term_new": "Suchbegriff ergänzen",
+                "exclusion": "Ausschlussliste ergänzen", "radius": "Radius ändern",
+                "remote_phrase": "Remote-Erkennung anpassen", "scoring_prompt": "Bewertungs-Prompt anpassen",
+                "profile": "Profil ergänzen", "career_url": "Karriereseite prüfen",
+                "label_more": "Mehr Jobs mit Status versehen"}
+CONFIDENCE = ("niedrig", "mittel", "hoch")
+MAX_RECOMMENDATIONS = 5
+MAX_NEW_LEVERS = 2
+MIN_EVIDENCE_N = 5  # a Recommendation needs at least one metric resting on this many
+
+
+@dataclass
+class CheckedAnswer:
+    summary: str
+    summary_evidence: list[str]
+    recommendations: list[dict] = field(default_factory=list)
+    new_levers: list[dict] = field(default_factory=list)
+    dropped: list[str] = field(default_factory=list)  # why, one line per dropped item
+
+
+# "1.200" and "1.200,5" are German thousands; "3,5" and "3.5" decimals.
+_NUMBER = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?")
+DROPPED_SUMMARY = "Die Gesamteinschätzung wurde verworfen, weil sie Zahlen nannte, die nicht in den Kennzahlen stehen."
+
+
+# Names, not statistics: a tier ("Stufe 3", "Tier 2", "3 Sterne") and the week ("7 Tage").
+_NAMES = re.compile(r"\b(?:Stufe|Tier)\s+[1-3]\b|\b[1-3]\s+Stern(?:e|en)?\b|\b7\s+Tage?n?\b", re.IGNORECASE)
+
+
+def _numbers(text: str) -> list[tuple[str, float]]:
+    found = []
+    for match in _NUMBER.findall(_NAMES.sub(" ", text)):
+        plain = match.replace(".", "") if re.fullmatch(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?", match) else match
+        found.append((match, float(plain.replace(",", "."))))
+    return found
+
+
+def _problem(texts: list[str], evidence: list[str], metrics: dict[str, Metric], target: str = "",
+             min_n: int = MIN_EVIDENCE_N) -> str | None:
+    """Why an item is not grounded in the input, or None. Numbers in its text must be values of its
+    own evidence, or part of its target."""
+    unknown = [e for e in evidence if e not in metrics]
+    if unknown:
+        return f"unbekannte Kennzahl {', '.join(unknown)}"
+    if not evidence:
+        return "keine Kennzahl als Beleg"
+    if all(metrics[e].n < min_n for e in evidence):
+        return f"Belege beruhen auf zu wenigen Jobs (n unter {min_n})"
+    allowed = {metrics[e].value for e in evidence} | {value for _, value in _numbers(target)}
+    stray = [text for t in texts for text, value in _numbers(t) if value not in allowed]
+    if stray:
+        return f"Zahl ohne Beleg: {', '.join(stray)}"
+    return None
+
+
+def _target(item: dict, inp: ReportInput, active_terms: list[str], exclusions: list[str]) -> tuple[str, str | None]:
+    """The target as it will be applied, and why it does not fit its Lever (or None)."""
+    lever, target = item["lever"], item["target"].strip()
+    active = {t.casefold(): t for t in active_terms}
+    if lever == "search_term_off":
+        term = active.get(target.casefold()) or active.get(inp.terms.get(target, "").casefold())
+        return (term, None) if term else (target, f"'{target}' ist kein aktiver Suchbegriff")
+    if lever == "search_term_new":
+        if not target or target.casefold() in active:
+            return target, f"'{target}' ist schon ein aktiver Suchbegriff" if target else "kein Suchbegriff genannt"
+    if lever == "exclusion":
+        if not target or target.casefold() in {e.casefold() for e in exclusions}:
+            return target, f"'{target}' steht schon auf der Ausschlussliste" if target else "kein Wort genannt"
+    return target, None
+
+
+def check_answer(data: dict, inp: ReportInput, active_terms: list[str], exclusions: list[str]) -> CheckedAnswer:
+    """Keep what is grounded in the input, drop the rest with its reason. Never raises."""
+    metrics = {m.id: m for m in inp.metrics}
+    result = CheckedAnswer(data["summary"], data["summary_evidence"])
+    problem = _problem([data["summary"]], data["summary_evidence"], metrics, min_n=0)
+    if problem:
+        result.dropped.append(f"Gesamteinschätzung: {problem}")
+        result.summary, result.summary_evidence = DROPPED_SUMMARY, []
+    for item in data["recommendations"]:
+        # Too few labels is exactly when asking for more of them is right.
+        min_n = 0 if item["lever"] == "label_more" else MIN_EVIDENCE_N
+        target, problem = _target(item, inp, active_terms, exclusions)
+        problem = problem or _problem([item["action"]], item["evidence"], metrics, target, min_n)
+        if not problem and len(result.recommendations) >= MAX_RECOMMENDATIONS:
+            problem = f"mehr als {MAX_RECOMMENDATIONS} Empfehlungen"
+        if problem:
+            result.dropped.append(f"Empfehlung '{item['action']}': {problem}")
+        else:
+            result.recommendations.append({**item, "target": target})
+    for idea in data["new_levers"]:
+        problem = _problem([idea["what"], idea["why"]], idea["evidence"], metrics)
+        if not problem and len(result.new_levers) >= MAX_NEW_LEVERS:
+            problem = f"mehr als {MAX_NEW_LEVERS} Ideen"
+        if problem:
+            result.dropped.append(f"Idee '{idea['name']}': {problem}")
+        else:
+            result.new_levers.append(idea)
+    return result
+
+
+SYSTEM_PROMPT = ("You review the metrics of a job search pipeline and answer only with the requested JSON. "
+                 "You never write numbers in the text, you cite metric IDs instead.")
+_EVIDENCE = {"type": "array", "items": {"type": "string"}, "minItems": 1}
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "summary_evidence": _EVIDENCE,
+        "recommendations": {
+            "type": "array",
+            "maxItems": MAX_RECOMMENDATIONS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "lever": {"type": "string", "enum": list(LEVERS)},
+                    "target": {"type": "string"},
+                    "action": {"type": "string"},
+                    "evidence": _EVIDENCE,
+                    "confidence": {"type": "string", "enum": list(CONFIDENCE)},
+                },
+                "required": ["lever", "target", "action", "evidence", "confidence"],
+                "additionalProperties": False,
+            },
+        },
+        "new_levers": {
+            "type": "array",
+            "maxItems": MAX_NEW_LEVERS,
+            "items": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "what": {"type": "string"}, "why": {"type": "string"},
+                               "evidence": _EVIDENCE},
+                "required": ["name", "what", "why", "evidence"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary", "summary_evidence", "recommendations", "new_levers"],
+    "additionalProperties": False,
+}
+
+
+def build_prompt(inp: ReportInput) -> str:
+    rubric = resources.files("jobsearch.prompts").joinpath("weekly_report.md").read_text(encoding="utf-8")
+    return f"{rubric}\n# Input\n\n{inp.to_prompt_json()}\n"
+
+
+# --- Making and storing the report ---------------------------------------------------------------
+
+@dataclass
+class ReportCounts:
+    recommendations: int = 0
+    dropped: int = 0
+    new_levers: int = 0
+
+
+@dataclass
+class ReportResult:
+    report_id: int
+    counts: ReportCounts = field(default_factory=ReportCounts)
+    path: Path | None = None
+    error: str | None = None
+
+
+def targets(conn: sqlite3.Connection, cfg: Config) -> tuple[list[str], list[str]]:
+    """The active Search terms and the exclusion list, as the Daily run sees them."""
+    manual = config.read_list_file(cfg.search_terms_path) if cfg.search_terms_path.exists() else []
+    exclusions = config.read_list_file(cfg.exclusions_path) if cfg.exclusions_path.exists() else []
+    return active_terms(manual, derived_terms(conn)), exclusions
+
+
+def last_period_end(conn: sqlite3.Connection) -> str | None:
+    """The last day the newest finished report looked at. Failed or interrupted ones do not count."""
+    return conn.execute("SELECT max(period_end) FROM reports WHERE answer_json IS NOT NULL").fetchone()[0]
+
+
+def make_report(conn: sqlite3.Connection, cfg: Config, today: date, ask=ai.ask) -> ReportResult:
+    """One AI call, the checks, the rows and the Markdown file. An AI failure is stored, never raised."""
+    terms, exclusions = targets(conn, cfg)
+    inp = report_input(conn, today, cfg.found_elsewhere_path, last_period_end(conn), terms)
+    with conn:
+        report_id = conn.execute(
+            """INSERT INTO reports (created_at, period_start, period_end, prompt_hash, input_json)
+               VALUES (?, ?, ?, ?, ?)""",
+            (db.now(), (today - timedelta(days=6)).isoformat(), today.isoformat(),
+             prompts.version("weekly_report.md"), inp.to_prompt_json()),
+        ).lastrowid
+    result = ReportResult(report_id)
+    try:
+        answer = ask(build_prompt(inp), purpose="weekly_report", model=cfg.model_scoring, schema=SCHEMA,
+                     system=SYSTEM_PROMPT, usage_recorder=db.usage_recorder(conn))
+    except ai.AiError as e:
+        log.error("Weekly report failed: %s", e)
+        result.error = str(e)
+        with conn:
+            conn.execute("UPDATE reports SET error = ? WHERE id = ?", (result.error, report_id))
+        return result
+    checked = check_answer(answer.data, inp, terms, exclusions)
+    for reason in checked.dropped:
+        log.info("Weekly report dropped %s", reason)
+    result.counts = ReportCounts(len(checked.recommendations), len(checked.dropped), len(checked.new_levers))
+    _store(conn, report_id, answer.model, checked, result.counts)
+    result.path = write_report(conn, cfg.reports_dir, report_id)
+    return result
+
+
+def _store(conn: sqlite3.Connection, report_id: int, model: str, checked: CheckedAnswer,
+           counts: ReportCounts) -> None:
+    rows = [(report_id, i, "change", r["lever"], r["target"], r["action"], None, json.dumps(r["evidence"]),
+             r["confidence"]) for i, r in enumerate(checked.recommendations)]
+    rows += [(report_id, i, "new_lever", idea["name"], "", idea["what"], idea["why"],
+              json.dumps(idea["evidence"]), None) for i, idea in enumerate(checked.new_levers)]
+    answer = {"summary": checked.summary, "summary_evidence": checked.summary_evidence, "dropped": checked.dropped}
+    with conn:
+        conn.execute("UPDATE reports SET model = ?, answer_json = ?, counts_json = ? WHERE id = ?",
+                     (model, json.dumps(answer, ensure_ascii=False), json.dumps(counts.__dict__), report_id))
+        conn.executemany(
+            """INSERT INTO recommendations (report_id, position, kind, lever, target, action, why, evidence_json,
+                                            confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", rows)
+
+
+# --- Reading the report back ---------------------------------------------------------------------
+
+@dataclass
+class Recommendation:
+    id: int
+    kind: str  # change | new_lever
+    lever: str  # for a new_lever: its proposed name
+    target: str
+    action: str  # for a new_lever: what it would change
+    why: str | None
+    evidence: list[Metric]
+    confidence: str | None
+    decision: str  # open | accepted | rejected
+    decided_at: str | None
+
+
+@dataclass
+class Report:
+    id: int
+    created_at: str
+    period_start: str
+    period_end: str
+    model: str
+    summary: str
+    summary_evidence: list[Metric]
+    recommendations: list[Recommendation]
+    dropped: list[str]
+    counts: ReportCounts
+
+
+def load_report(conn: sqlite3.Connection, report_id: int) -> Report:
+    row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+    metrics = {m["id"]: Metric(**m) for m in json.loads(row["input_json"])["metrics"]}
+    answer = json.loads(row["answer_json"])
+    recs = [Recommendation(r["id"], r["kind"], r["lever"], r["target"], r["action"], r["why"],
+                           [metrics[e] for e in json.loads(r["evidence_json"])], r["confidence"], r["decision"],
+                           r["decided_at"])
+            for r in conn.execute("SELECT * FROM recommendations WHERE report_id = ? ORDER BY kind, position",
+                                  (report_id,))]
+    return Report(row["id"], row["created_at"], row["period_start"], row["period_end"], row["model"],
+                  answer["summary"], [metrics[e] for e in answer["summary_evidence"]], recs, answer["dropped"],
+                  ReportCounts(**json.loads(row["counts_json"])))
+
+
+def latest_report(conn: sqlite3.Connection) -> Report | None:
+    """The newest report whose AI call worked."""
+    report_id = conn.execute("SELECT max(id) FROM reports WHERE answer_json IS NOT NULL").fetchone()[0]
+    return load_report(conn, report_id) if report_id else None
+
+
+def _evidence_table(evidence: list[Metric]) -> list[str]:
+    return ["", "| Kennzahl | Wert | n |", "|---|---:|---:|"] + [f"| {m.label} | {m.value} | {m.n} |"
+                                                                for m in evidence]
+
+
+def render(report: Report) -> str:
+    year, week, _ = date.fromisoformat(report.period_end).isocalendar()
+    lines = [f"# Wochenbericht KW {week}/{year}", "",
+             f"Zeitraum {report.period_start} bis {report.period_end}, erstellt {report.created_at[:16]} "
+             f"mit {report.model}.", "", "## Einschätzung", "", report.summary]
+    if report.summary_evidence:
+        lines += _evidence_table(report.summary_evidence)
+    changes = [r for r in report.recommendations if r.kind == "change"]
+    lines += ["", f"## Empfehlungen ({len(changes)})"]
+    if not changes:
+        lines += ["", "Keine Änderung nötig."]
+    for i, r in enumerate(changes, 1):
+        target = f" `{r.target}`" if r.target else ""
+        lines += ["", f"### {i}. {LEVER_LABELS.get(r.lever, r.lever)}{target} (Sicherheit: {r.confidence})", "",
+                  r.action]
+        lines += _evidence_table(r.evidence)
+    ideas = [r for r in report.recommendations if r.kind == "new_lever"]
+    if ideas:
+        lines += ["", "## Ideen für neue Stellschrauben"]
+        for r in ideas:
+            lines += ["", f"### {r.lever}", "", f"{r.action} {r.why}"]
+            lines += _evidence_table(r.evidence)
+    lines += ["", f"verworfen: {report.counts.dropped} (Gründe im Log)"]
+    return "\n".join(lines) + "\n"
+
+
+def write_report(conn: sqlite3.Connection, reports_dir: Path, report_id: int) -> Path:
+    """data/reports/YYYY-Www.md; a second report in the same week replaces the file, the rows stay."""
+    report = load_report(conn, report_id)
+    year, week, _ = date.fromisoformat(report.period_end).isocalendar()
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    path = reports_dir / f"{year}-W{week:02d}.md"
+    path.write_text(render(report), encoding="utf-8")
+    return path
