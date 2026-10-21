@@ -54,6 +54,14 @@ _Avoid_: Rating, match, relevance
 A Fit score based only on a short snippet because no full description was available. It is shown like any other score, never hidden.
 _Avoid_: Preliminary score
 
+**Sorted out** ("aussortiert"):
+A ★ Job the AI marked as clearly outside the candidate's field. It stays in the database with its Fit score but is hidden by default until the candidate sets a Job status. In code it is `sorted_out`.
+_Avoid_: Rejected, dismissed, junk
+
+**Rescoring** ("Neubewertung"):
+Rating ★ Jobs again after the scoring prompt changed, by the manual command `jobsearch rescore`. It adds a newer Fit score and keeps the old one; readers count a Job by its newest Fit score.
+_Avoid_: Re-rating, refresh
+
 **Job status**:
 The candidate's own progress with a Job, set by hand. It is separate from Eligibility and Fit score. One of new, interesting, not interesting, applied or rejected.
 _Avoid_: State, stage

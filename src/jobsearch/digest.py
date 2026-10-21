@@ -1,7 +1,7 @@
 """The Digest: a German Markdown summary per day in data/digests/YYYY-MM-DD.md.
 
 It lists the Jobs scored that day by Fit score, the Reopenings found that day,
-and how many Jobs still wait for scoring. Sorted out Jobs are only counted, and
+and how many Jobs still wait for scoring. Sorted out Jobs are only counted.
 Jobs rescored that day are left out, since they were scored before. A second run on the same day rewrites
 the file, so it always shows the whole day.
 """
@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-from . import usage
+from . import db, usage
 from .evaluation import day_usage
 from .scoring import ScoreCounts, backlog
 
@@ -39,13 +39,13 @@ class DayReport:
 def collect_day(conn: sqlite3.Connection, day: date) -> DayReport:
     report = DayReport(day, backlog=backlog(conn))
     rows = conn.execute(
-        """SELECT j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.remote_type, j.is_generic,
+        f"""SELECT j.id, j.title, j.company, j.location, j.distance_km, j.is_target_company, j.remote_type, j.is_generic,
                   s.tier, s.reasoning, s.matching_skills, s.missing_skills, s.part_time_signal, s.low_confidence,
                   s.sorted_out, (SELECT p.url FROM postings p WHERE p.job_id = j.id AND p.url IS NOT NULL
                    ORDER BY p.id LIMIT 1) AS url
            FROM fit_scores s JOIN jobs j ON j.id = s.job_id
            WHERE s.scored_at LIKE ? AND j.eligibility = 'eligible'
-             AND s.id = (SELECT max(id) FROM fit_scores WHERE job_id = j.id)
+             AND s.id = {db.NEWEST_SCORE_ID}
              AND NOT EXISTS (SELECT 1 FROM fit_scores o WHERE o.job_id = j.id AND o.scored_at < ?)
            ORDER BY s.tier DESC, j.is_target_company DESC, j.distance_km""",
         (f"{day.isoformat()}%", day.isoformat()),

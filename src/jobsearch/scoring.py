@@ -274,7 +274,7 @@ _RESCOREABLE = """
     j.eligibility != 'ineligible' AND j.status = 'new'
     AND s.tier = 1 AND (s.prompt_hash IS NULL OR s.prompt_hash != ?)
 """
-_NEWEST = "JOIN fit_scores s ON s.id = (SELECT max(id) FROM fit_scores WHERE job_id = j.id)"
+_NEWEST = f"JOIN fit_scores s ON s.id = {db.NEWEST_SCORE_ID}"
 
 
 @dataclass

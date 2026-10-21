@@ -80,7 +80,7 @@ def cmd_status(cfg: Config) -> None:
            WHERE p.description IS NULL AND j.eligibility != 'ineligible'"""
     ).fetchone()[0]
     print(f"Postings: {total} (ohne Beschreibung, aber in Reichweite: {missing})")
-    tiers = dict(conn.execute(f"SELECT s.tier, count(*) FROM jobs j JOIN fit_scores s ON s.id = {evaluation.NEWEST_ID} "
+    tiers = dict(conn.execute(f"SELECT s.tier, count(*) FROM jobs j JOIN fit_scores s ON s.id = {db.NEWEST_SCORE_ID} "
                               "GROUP BY s.tier").fetchall())
     print(f"Fit scores: ★★★ {tiers.get(3, 0)}, ★★ {tiers.get(2, 0)}, ★ {tiers.get(1, 0)}; "
           f"warten auf Bewertung: {backlog(conn)}")
@@ -135,9 +135,9 @@ def cmd_score(cfg: Config, conn, limit: int | None = None, warnings: list[str] =
     return 0
 
 
-def cmd_rescore(cfg: Config, ask=ai.ask) -> int:
+def cmd_rescore(cfg: Config, ask=None) -> int:
     """Rescore the ★ Jobs from an older scoring prompt, all in one go. Returns 1 if a batch failed."""
-    counts = run_rescoring(db.connect(cfg.db_path), cfg, ask=ask)
+    counts = run_rescoring(db.connect(cfg.db_path), cfg, ask=ask or ai.ask)
     if not counts.rescored and not counts.error:
         print("Keine ★-Jobs mit älterem Bewertungs-Prompt, nichts neu zu bewerten.")
         return 0

@@ -17,6 +17,10 @@ from pathlib import Path
 from .usage import CallUsage
 
 
+# The id of a Job's newest Fit score, for a query whose jobs table is `j`. A rescored Job has several.
+NEWEST_SCORE_ID = "(SELECT max(id) FROM fit_scores WHERE job_id = j.id)"
+
+
 def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 

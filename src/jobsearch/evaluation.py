@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
-from . import usage
+from . import db, usage
 from .companies import normalize_company
 from .config import ConfigError
 from .eligibility import NOT_FULLY_REMOTE_REASON
@@ -164,8 +164,7 @@ def changes_report(conn: sqlite3.Connection) -> list[str]:
 # --- Stage metrics -------------------------------------------------------------------------------
 
 # A rescored Job has several Fit scores; the metrics count it once, by its newest.
-NEWEST_ID = "(SELECT max(id) FROM fit_scores WHERE job_id = j.id)"
-NEWEST_SCORE = f"LEFT JOIN fit_scores s ON s.id = {NEWEST_ID}"
+NEWEST_SCORE = f"LEFT JOIN fit_scores s ON s.id = {db.NEWEST_SCORE_ID}"
 
 @dataclass
 class StageMetrics:
@@ -336,7 +335,7 @@ def score_tables(conn: sqlite3.Connection, period: Period, by: str | None = None
     each Job counts once, by its newest Fit score. With `by` every Fit score counts in its group, so
     grouping by prompt compares the old and the new judgment of a rescored Job."""
     cond, params = period.where("j.first_seen")
-    scores = "fit_scores s JOIN jobs j ON j.id = s.job_id" if by else f"jobs j JOIN fit_scores s ON s.id = {NEWEST_ID}"
+    scores = "fit_scores s JOIN jobs j ON j.id = s.job_id" if by else f"jobs j JOIN fit_scores s ON s.id = {db.NEWEST_SCORE_ID}"
     rows = conn.execute(
         f"""SELECT s.tier, j.status, s.model, s.profile_hash, s.prompt_hash, s.scored_at
             FROM {scores} WHERE {cond} ORDER BY s.scored_at""", params)

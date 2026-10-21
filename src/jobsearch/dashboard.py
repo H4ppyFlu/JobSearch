@@ -18,7 +18,7 @@ from .digest import REMOTE_LABELS
 
 log = logging.getLogger(__name__)
 
-LATEST_SCORE = "LEFT JOIN fit_scores f ON f.id = (SELECT max(id) FROM fit_scores WHERE job_id = j.id)"
+LATEST_SCORE = f"LEFT JOIN fit_scores f ON f.id = {db.NEWEST_SCORE_ID}"
 # Requests closer together than this belong to one visit, so filtering keeps the "neu" markers.
 VISIT_GAP = timedelta(hours=1)
 # A dashboard left open and used all day still starts a new visit after this long.
@@ -30,7 +30,8 @@ STATUS_LABELS = {"new": "neu", "interesting": "interessant", "not_interesting": 
 ELIGIBILITY_LABELS = {"reach": "in Reichweite oder unklar", "eligible": "in Reichweite", "unclear": "unklar",
                       "ineligible": "außerhalb", "all": "alle"}
 SOURCE_LABELS = {"bundesagentur": "Bundesagentur", "indeed": "Indeed", "career_page": "Karriereseite"}
-TIER_LABELS = {"3": "★★★", "2": "★★", "1": "★", "none": "unbewertet", "sorted_out": "aussortiert"}
+TIERS = {"3": "★★★", "2": "★★", "1": "★"}
+TIER_LABELS = {**TIERS, "none": "unbewertet", "sorted_out": "aussortiert"}
 # Sorted out Jobs are hidden until the candidate sets a Job status.
 HIDDEN_SORTED_OUT = "(f.sorted_out = 1 AND j.status = 'new')"
 
@@ -52,7 +53,7 @@ def job_filter(args) -> tuple[str, list, dict]:
         where.append(f"NOT coalesce({HIDDEN_SORTED_OUT}, 0)")
     if chosen["tier"] == "none":
         where.append("f.tier IS NULL")
-    elif chosen["tier"] in ("1", "2", "3"):
+    elif chosen["tier"] in TIERS:
         where.append("f.tier = ?")
         params.append(int(chosen["tier"]))
     if chosen["status"] in STATUS_LABELS:

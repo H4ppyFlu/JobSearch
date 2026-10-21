@@ -27,8 +27,7 @@ log = logging.getLogger(__name__)
 WINDOW_DAYS = 90
 MIN_JOBS = 3
 # The newest Fit score of a Job; a Job can be scored again, for example after a merge.
-NEWEST_SCORE = """LEFT JOIN fit_scores s ON s.id = (SELECT id FROM fit_scores WHERE job_id = j.id
-                                                   ORDER BY scored_at DESC, id DESC LIMIT 1)"""
+NEWEST_SCORE = f"LEFT JOIN fit_scores s ON s.id = {db.NEWEST_SCORE_ID}"
 
 
 @dataclass
@@ -54,6 +53,7 @@ def active_companies(conn: sqlite3.Connection, today: date) -> list[CompanySigna
     """Companies with MIN_JOBS or more eligible Jobs first seen in the window, or a Reopening there.
     Sorted out Jobs do not count.
     Most Jobs first. Nothing is written to companies.csv; the note only names candidates."""
+    # Sorted out Jobs are left out whatever their Job status, unlike in the dashboard list.
     rows = conn.execute(
         f"""SELECT j.company, j.is_target_company, j.reopening_of, s.tier FROM jobs j {NEWEST_SCORE}
             WHERE j.eligibility = 'eligible' AND j.is_generic = 0 AND j.first_seen >= ?
