@@ -44,7 +44,8 @@
 </head>
 <body>
 <header><a href="{{ url_for('jobs') }}">JobSearch</a>
-  <a href="{{ url_for('report_page') }}" style="font-weight:normal;margin-left:16px">Wochenbericht</a></header>
+  <a href="{{ url_for('report_page') }}" style="font-weight:normal;margin-left:16px">Wochenbericht</a>
+  <a href="{{ url_for('market_page') }}" style="font-weight:normal;margin-left:16px">Markt</a></header>
 <main>{% block content %}{% endblock %}</main>
 </body>
 </html>

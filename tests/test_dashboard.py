@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -345,3 +345,40 @@ def test_deciding_waits_while_a_run_holds_the_lock(client, conn, cfg):
         response = decide_on(client, rec_id, "accepted")
     assert response.status_code == 409 and "später" in response.get_data(as_text=True)
     assert "-Planer" not in cfg.search_terms_path.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def no_ai(monkeypatch):
+    from jobsearch import ai
+
+    def fail(*args, **kwargs):
+        raise AssertionError("the dashboard must not call the AI")
+    monkeypatch.setattr(ai, "ask", fail)
+
+
+def market_data(conn):
+    for title in ("A", "B", "C"):
+        job = add_job(conn, title, company="Beispiel Technik GmbH", first_seen=date.today().isoformat())
+        score(conn, job, 2)  # missing SAP, matching Projektplanung
+    with conn:
+        conn.executemany("INSERT INTO skill_groups (text, group_name) VALUES (?, ?)",
+                         [("SAP", "SAP / ERP"), ("SAP PM", "SAP / ERP")])
+
+
+def test_market_page_shows_companies_skill_groups_and_the_ungrouped_note(client, conn, no_ai):
+    market_data(conn)
+
+    html = page(client, "/markt")
+
+    assert "Beispiel Technik GmbH" in html and "Kandidat für companies.csv" in html
+    assert "SAP / ERP" in html and "/markt/gruppe?name=SAP+/+ERP" in html
+    assert "1 Skill-Text ist noch ohne Gruppe" in html and "jobsearch market" in html
+
+
+def test_market_group_detail_lists_its_original_texts(client, conn, no_ai):
+    market_data(conn)
+
+    html = page(client, "/markt/gruppe?name=SAP+%2F+ERP")
+
+    assert "SAP PM" in html and "SAP" in html and "--regroup" in html
+    assert client.get("/markt/gruppe?name=Unbekannt").status_code == 404

@@ -220,6 +220,27 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
         return render_template("report.html", report=shown, entries=entries, token=token, notice=notice,
                                LEVER_LABELS=report.LEVER_LABELS, APPLIED=report.APPLIED, files=files), code
 
+    @app.get("/markt")
+    def market_page():
+        """The Market report from the database as it is; grouping new texts is left to `jobsearch market`."""
+        from . import market
+
+        today = now().date()
+        return render_template("market.html", companies=market.active_companies(conn(), today),
+                               skills=market.skill_table(conn(), market.period_for(None, None), today),
+                               ungrouped=len(market.ungrouped_texts(conn())),
+                               MIN_JOBS=market.MIN_JOBS, WINDOW_DAYS=market.WINDOW_DAYS)
+
+    @app.get("/markt/gruppe")
+    def market_group():
+        from . import market
+
+        name = request.args.get("name", "")
+        texts = market.group_texts(conn(), name)
+        if not texts:
+            abort(404)
+        return render_template("market_group.html", group=name, texts=texts)
+
     @app.post("/empfehlung/<int:rec_id>")
     def decide(rec_id: int):
         from . import report, scheduler

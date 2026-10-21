@@ -126,6 +126,18 @@ _Avoid_: Suggestion, advice. In German output it is "Empfehlung".
 A setting that changes what a Stage lets through, from a fixed list in code: a Search term, the exclusion list, the radius, remote detection, the scoring prompt, the Profile, a career URL, or labelling more Jobs. The AI can propose new ones; only the candidate adds them.
 _Avoid_: Knob, parameter. In German output it is "Stellschraube".
 
+**Market report**:
+The view of Skill groups and Active companies across all scored Jobs, from `jobsearch market` and the dashboard page "Markt".
+_Avoid_: Market analysis, trends. In German output it is "Marktbericht".
+
+**Skill group**:
+A lasting group that skill texts from Fit scores belong to, so that differently worded skills are counted together. The AI assigns each text once; `jobsearch market --regroup` starts over.
+_Avoid_: Category, cluster. In German output it is "Skill-Gruppe".
+
+**Active company**:
+A company with 3 or more Jobs in reach within 90 days, or a Reopening, not counting Generic jobs.
+_Avoid_: Hot company, top employer. In German output it is "aktive Firma".
+
 ### Trust
 
 **Third-party text**:

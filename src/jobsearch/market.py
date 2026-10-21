@@ -284,3 +284,21 @@ def skill_report(rows: list[SkillRow], ungrouped: int, period: Period) -> list[s
         lines.append("  Keine Skill-Gruppen im Zeitraum.")
     lines.append(f"  ohne Gruppe: {ungrouped}")
     return lines
+
+
+@dataclass(frozen=True)
+class GroupText:
+    text: str
+    missing: int  # ★★/★★★ Jobs whose newest score names the text as missing
+    matching: int
+
+
+def group_texts(conn: sqlite3.Connection, group: str) -> list[GroupText]:
+    """The original texts of a Skill group, so a wrong grouping is easy to spot. Empty if there is no such group."""
+    texts = [r[0] for r in conn.execute("SELECT text FROM skill_groups WHERE group_name = ?", (group,))]
+    counts = {side: Counter() for side in ("missing", "matching")}
+    for row in scored_skills(conn):
+        for side, counter in counts.items():
+            counter.update(set(skill_items(row, f"{side}_skills")))
+    found = [GroupText(t, counts["missing"][t], counts["matching"][t]) for t in texts]
+    return sorted(found, key=lambda g: (-(g.missing + g.matching), g.text.casefold()))
