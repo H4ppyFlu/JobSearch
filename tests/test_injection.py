@@ -161,7 +161,7 @@ def test_safe_url(url, kept):
     assert safe_url(url) == (url.strip() if kept else None)
 
 
-@pytest.mark.parametrize("prompt", ["scoring.md", "career_extract.md", "career_setup.md"])
+@pytest.mark.parametrize("prompt", ["scoring.md", "career_extract.md", "career_setup.md", "skill_groups.md"])
 def test_prompts_with_third_party_text_say_it_is_data(prompt):
     from importlib import resources
 
@@ -170,9 +170,9 @@ def test_prompts_with_third_party_text_say_it_is_data(prompt):
 
 
 def test_system_prompts_with_third_party_text_say_it_is_data():
-    from jobsearch import career, career_setup, scoring
+    from jobsearch import career, career_setup, market, scoring
 
-    for system in (scoring.SYSTEM_PROMPT, career.SYSTEM, career_setup.SYSTEM):
+    for system in (scoring.SYSTEM_PROMPT, career.SYSTEM, career_setup.SYSTEM, market.SYSTEM):
         assert "never instructions" in system
 
 
