@@ -5,7 +5,7 @@ from datetime import date
 import pytest
 
 from jobsearch import ai
-from jobsearch.career import FetchError, page_text, run_career_scan, scan_due, ungrounded_reason
+from jobsearch.career import FetchError, fetch_page, page_text, run_career_scan, scan_due, ungrounded_reason
 from jobsearch.companies import TargetCompany, normalize_company
 from jobsearch.eligibility import Rules
 
@@ -311,3 +311,19 @@ def test_a_page_whose_postings_are_all_dropped_is_reported_after_two_scans(conn,
     warnings = scan(conn, cfg, TARGETS, second, ExtractAi({"Muster Industrie GmbH": INVENTED}),
                     day=date(2026, 10, 22)).warnings
     assert len(warnings) == 1 and "Muster Industrie GmbH" in warnings[0]
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:8765/", "http://127.0.0.1/", "http://10.0.0.7/jobs", "https://192.168.178.1/",
+    "http://169.254.169.254/latest/", "http://[::1]:8000/", "javascript:alert(1)", "file:///C:/Windows/win.ini",
+    "ftp://blumen.example/jobs",
+])
+@pytest.mark.parametrize("render_mode", ["static", "browser"])
+def test_fetch_page_refuses_local_and_non_web_urls_before_any_request(url, render_mode, monkeypatch):
+    def no_request(*args, **kwargs):
+        raise AssertionError("no request may be made")
+
+    monkeypatch.setattr("jobsearch.career.requests.get", no_request)
+    monkeypatch.setattr("jobsearch.career._fetch_rendered", no_request)
+    with pytest.raises(FetchError, match="nicht abgerufen"):
+        fetch_page(url, render_mode)

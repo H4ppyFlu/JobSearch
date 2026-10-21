@@ -13,8 +13,10 @@ import shutil
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
+from urllib.parse import urlparse
 
 from . import ai
+from .companies import normalize_company
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +25,10 @@ TIMEOUT_SECONDS = 2700  # web research for a whole batch takes much longer than 
 FIELDS = ("career_url", "ats_type", "render_mode")
 ATS_TYPES = ["personio", "workday", "successfactors", "softgarden", "smartrecruiters", "greenhouse", "lever",
              "recruitee", "dvinci", "rexx", "other", "unknown"]
+# Career pages hosted by an applicant tracking system carry its domain, not the company name
+ATS_DOMAINS = ("personio.de", "personio.com", "myworkdayjobs.com", "successfactors.com", "successfactors.eu",
+               "softgarden.io", "smartrecruiters.com", "greenhouse.io", "lever.co", "recruitee.com", "dvinci.de",
+               "rexx-systems.com", "oraclecloud.com")
 SYSTEM = "You research company career pages on the web and answer only with the requested JSON."
 
 SCHEMA = {
@@ -114,15 +120,31 @@ def run_setup(path: Path, *, model: str, ask=ai.ask, recheck: dict[str, str] | N
             info = found[i]
             if info["note"]:
                 result.notes.append(f"{row['name']}: {info['note']}")
-            if not info["career_url"]:
+            if not _acceptable(info["career_url"]):
                 result.not_found.append(row["name"])
                 continue
+            if not _domain_fits(row["name"], info["career_url"]):
+                result.notes.append(f"{row['name']}: Domain passt nicht zum Firmennamen, bitte prüfen")
             for name in FIELDS:
                 if row["name"] in recheck or not (row.get(name) or "").strip():
                     row[name] = info[name]
             result.filled += 1
         _write(path, fieldnames, rows, encoding)  # after every batch, so a later failure keeps what was found
     return result
+
+
+def _acceptable(url: str) -> bool:
+    """The setup browses pages written by strangers, so its answer is checked before it is stored."""
+    parts = urlparse(url)
+    return parts.scheme == "https" and bool(parts.hostname)
+
+
+def _domain_fits(company: str, url: str) -> bool:
+    """Whether the host names the company or belongs to a known applicant tracking system."""
+    host = (urlparse(url).hostname or "").lower()
+    if any(host == d or host.endswith("." + d) for d in ATS_DOMAINS):
+        return True
+    return any(token in host for token in normalize_company(company))
 
 
 def _write(path: Path, fieldnames: list[str], rows: list[dict], encoding: str) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
@@ -43,3 +44,11 @@ def is_local_host(host: str) -> bool:
     except ValueError:
         return False
     return address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified
+
+
+def safe_url(url: str | None) -> str | None:
+    """The URL if it is an http(s) link with a host, else None. Postings come from third parties and
+    their links end up as href in the dashboard and the Digest, where javascript: or data: would run."""
+    url = (url or "").strip()
+    parts = urlparse(url)
+    return url if parts.scheme.lower() in ("http", "https") and parts.hostname else None

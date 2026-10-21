@@ -4,7 +4,7 @@ import json
 import pytest
 
 from jobsearch import ai, injection
-from jobsearch.sources import is_local_host
+from jobsearch.sources import is_local_host, safe_url
 
 from .conftest import FIXTURES
 
@@ -130,3 +130,12 @@ def test_the_cli_prints_each_expectation_and_fails_on_a_miss(cfg, monkeypatch, c
     assert 'FEHLER Job 3: remote nicht "full" (remote full)' in out
     assert "OK     Job 2 (direkte Anweisung): nicht Tier 3 (Tier 1)" in out
     assert "6 von 7 Erwartungen erfüllt." in out
+
+
+@pytest.mark.parametrize("url, kept", [
+    ("https://blumen.example/jobs/1", True), ("http://blumen.example/jobs/1", True),
+    ("javascript:alert(1)", False), ("JavaScript:alert(1)", False), ("data:text/html,x", False),
+    ("mailto:jobs@blumen.example", False), ("/jobs/1", False), ("https:///jobs", False), ("", False), (None, False),
+])
+def test_safe_url(url, kept):
+    assert safe_url(url) == (url.strip() if kept else None)

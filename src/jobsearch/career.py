@@ -27,7 +27,7 @@ from .config import Config
 from .daily import Counts, locate, store_postings
 from .eligibility import Rules
 from .matching import JobIndex
-from .sources import Location, Posting
+from .sources import Location, Posting, is_local_host
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +119,12 @@ class FetchError(Exception):
 
 
 def fetch_page(url: str, render_mode: str = "static") -> str:
+    # The URL can come from the AI (extracted links, career setup), so only public web pages are fetched
+    parts = urlparse(url)
+    if parts.scheme not in ("http", "https"):
+        raise FetchError(f"nicht abgerufen: nur http(s)-Adressen, nicht {parts.scheme or 'ohne Schema'}")
+    if is_local_host(parts.hostname or ""):
+        raise FetchError(f"nicht abgerufen: lokale Adresse {parts.hostname}")
     if render_mode == "browser":
         return _fetch_rendered(url)
     try:

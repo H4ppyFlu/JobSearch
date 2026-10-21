@@ -141,3 +141,11 @@ def test_daily_run_stores_what_was_in_effect(conn, cfg):
     assert settings["profile"] is None  # no Profile configured, the run still works
     assert settings["radius_km"] == 30 and settings["alert_mail"] is False
     assert "Werkstudent" not in json.dumps(settings)  # the exclusion list is kept as a hash only
+
+
+def test_a_posting_with_a_script_link_is_kept_without_the_link(conn, cfg):
+    bad = posting(1, "Landschaftsgärtner")
+    bad.url = "javascript:alert(document.cookie)"
+    run_daily(conn, cfg, FakeClient(radius=[bad], nationwide=[]), TARGETS, RULES, ["Gärtner"],
+              today=date(2026, 10, 15))
+    assert [tuple(r) for r in conn.execute("SELECT title, url FROM postings")] == [("Landschaftsgärtner", None)]

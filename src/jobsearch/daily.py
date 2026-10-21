@@ -25,7 +25,7 @@ from .eligibility import HOMEOFFICE_REASON, Rules, decide, distance_km, settle_r
 from .geo import Gazetteer
 from .matching import JobIndex, MatchRules, Placement, attach
 from .scoring import profile_hash
-from .sources import Location, Posting
+from .sources import Location, Posting, safe_url
 from .sources.bundesagentur import BundesagenturClient, SchemaChanged
 from .sources.indeed_mail import Mailbox, MailError, parse_alert
 
@@ -164,6 +164,7 @@ def store_postings(conn: sqlite3.Connection, postings, cfg: Config, targets: lis
                    index: JobIndex, today: date, counts: Counts) -> None:
     match_rules = MatchRules(cfg.reopening_days, cfg.radius_target_company_km)
     for posting in postings:
+        posting.url = safe_url(posting.url)  # third-party links become href in the dashboard and the Digest
         placement = place(posting, cfg, targets)
         decision = decide(rules, posting.title, placement.distance_km,
                           placement.is_target_company, posting.homeoffice_possible)

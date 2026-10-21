@@ -15,9 +15,10 @@ Beispiel Software SE,Beispiel Group,Musterstadt,,,
 class SetupAi:
     """Answers every company in the prompt with a made-up career page."""
 
-    def __init__(self, fail=None):
+    def __init__(self, fail=None, urls=None):
         self.calls = []
         self.fail = fail
+        self.urls = urls or {}  # company name -> career_url to answer instead of the made-up one
 
     def __call__(self, prompt, *, model, schema, system, check=None, tools=(), timeout=None):
         self.calls.append((prompt, tools))
@@ -25,7 +26,8 @@ class SetupAi:
             raise ai.AiError(self.fail)
         names = [line.split("] ", 1)[1].split(" (", 1)[0]
                  for line in prompt.split("# Companies\n\n", 1)[1].splitlines() if line.startswith("- [")]
-        data = {"companies": [{"id": i, "career_url": f"https://{n.split()[0].lower()}.example/karriere",
+        data = {"companies": [{"id": i,
+                               "career_url": self.urls.get(n, f"https://{n.split()[0].lower()}.example/karriere"),
                                "ats_type": "personio", "render_mode": "static", "note": ""}
                               for i, n in enumerate(names)]}
         check(data)
@@ -93,3 +95,24 @@ def test_a_list_saved_with_bom_is_read_and_keeps_its_bom(companies):
     assert result.filled == 2
     raw = companies.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbfname,") and raw.count(b"\xef\xbb\xbf") == 1
+
+
+def test_a_career_url_without_https_is_not_written(companies):
+    fake = SetupAi(urls={"Example Tech AG": "http://example.example/karriere"})
+    result = run_setup(companies, model="sonnet", ask=fake)
+    assert result.not_found == ["Example Tech AG"] and result.filled == 1
+    assert {r["name"]: r for r in rows(companies)}["Example Tech AG"]["career_url"] == ""
+
+
+def test_a_domain_unrelated_to_the_company_is_written_with_a_note(companies):
+    fake = SetupAi(urls={"Example Tech AG": "https://jobs.fremd.test/karriere"})
+    result = run_setup(companies, model="sonnet", ask=fake)
+    assert {r["name"]: r for r in rows(companies)}["Example Tech AG"]["career_url"] == "https://jobs.fremd.test/karriere"
+    assert result.notes == ["Example Tech AG: Domain passt nicht zum Firmennamen, bitte prüfen"]
+
+
+def test_a_known_ats_domain_needs_no_company_name(companies):
+    fake = SetupAi(urls={"Example Tech AG": "https://karriere.jobs.personio.de/",
+                         "Beispiel Software SE": "https://wd3.myworkdayjobs.com/de-DE/Karriere"})
+    result = run_setup(companies, model="sonnet", ask=fake)
+    assert result.filled == 2 and result.notes == []
