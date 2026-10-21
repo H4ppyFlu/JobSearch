@@ -105,3 +105,17 @@ _Avoid_: Rating, feedback
 **Found elsewhere**:
 An opening the candidate found outside the tool and recorded in `private/found_elsewhere.csv`. Tracing it shows the Stage where the pipeline lost it, including openings never collected at all.
 _Avoid_: External job. In German output it is "Fremdfund".
+
+### Trust
+
+**Third-party text**:
+Text written by others that reaches the AI: job ads, career pages and the web pages the career setup reads. It is data to judge, never instructions, and it reaches the model only inside the prompts' JSON structures. Only the prompts and the Profile define the task.
+_Avoid_: User input, content
+
+**Injection flag**:
+The AI's signal that a Job's ad or a career page contains text addressed to it or trying to steer the Fit score or the output. It is counted, logged and named in the Digest, but it is a signal, not a verdict: the Job is scored and the page read as usual.
+_Avoid_: Attack, blocked job. In code it is `injection_suspected`.
+
+**Injection check**:
+The measurement of how the real prompts hold up against Third-party text that addresses the model, run with synthetic Jobs and a synthetic career page (`jobsearch check-injection`, two AI calls). Each run is recorded in the plan, so a prompt change can be compared with the runs before.
+_Avoid_: Test (tests never call the AI), eval (that reads stored runs)
