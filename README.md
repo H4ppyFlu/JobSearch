@@ -114,6 +114,7 @@ A term you accept in the repo, for example a common technical word that is also 
 .venv\Scripts\python -m jobsearch eval --changes  # when settings changed (prompt, Profile, Search terms, ...)
 .venv\Scripts\python -m jobsearch eval --usage  # AI usage: tokens and API equivalent per day, purpose and model
 .venv\Scripts\python -m jobsearch report [--dry-run]  # Weekly report now (1 AI call; otherwise weekly inside daily)
+.venv\Scripts\python -m jobsearch market [--since D] [--until D] [--regroup]  # Market report (up to 3 AI calls)
 .venv\Scripts\python -m jobsearch check-injection  # prompts against injected instructions (2 AI calls)
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again
@@ -121,6 +122,8 @@ A term you accept in the repo, for example a common technical word that is also 
 ```
 
 The Weekly report is made by the Daily run once a week (`REPORT_INTERVAL_DAYS`), after scoring. Plain Python computes the pipeline's metrics (per stage, per active Search term, Fit score against Job status, found-elsewhere openings), each with an ID and the count it rests on; one AI call reads them and recommends up to five changes, each citing metric IDs. The AI writes no numbers: the report shows the values from the database, and a Recommendation whose text has a number its evidence does not back, that rests on too few Jobs, or whose target does not fit (a term that is not active, a word already excluded) is dropped and counted. The report lands in `data/reports/YYYY-Www.md`, on the dashboard page "Wochenbericht", and in a toast.
+
+The Market report looks across all scored Jobs. Active companies (3 or more Jobs in reach within 90 days, or a Reopening, without Generic jobs) come from plain Python, with a hint for those not yet on the Target company list. The skill texts of the ★★ and ★★★ Fit scores are free text, so `jobsearch market` first sorts new ones into lasting Skill groups with a few Haiku calls (checked by index in code), then counts per group how many Jobs miss it or show it. It runs only by hand and writes no file; the dashboard page "Markt" shows the same without AI and lists each group's original texts, so a wrong grouping is easy to spot (`--regroup` starts over).
 
 The dashboard runs on `127.0.0.1` only and opens in the browser. It lists the Jobs with filters, marks those that are new since the last visit, and shows the full description, all Postings and the score reasoning per Job. Setting a Job status there can carry a Feedback note, and recent notes go into the next scoring prompt.
 
