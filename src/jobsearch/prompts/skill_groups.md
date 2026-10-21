@@ -6,7 +6,7 @@ Put every skill into one group:
 
 - Use an existing group (listed under "Existing groups") whenever the skill belongs to it. Spell its name exactly as listed.
 - Otherwise create a new group. Skills of this batch that belong together get the same new group.
-- A group is something one can learn or show in a CV: a tool, a method, a language, a certificate, a field of knowledge. For example "SAP", "Projektmanagement", "Englisch", "Staplerschein".
+- A group is something one can learn or show in a CV: a tool, a method, a language, a certificate, a field of knowledge. For example "Projektmanagement", "Englisch", "Staplerschein".
 - Groups as broad as "IT-Kenntnisse", "Soft Skills" or "Berufserfahrung" are not allowed. Keep groups as narrow as a recruiter would list them.
 - Group names are German and at most 60 characters. Technical terms, product names and established English terms stay in their original form.
 - A skill that bundles several things goes into the group of its main part.

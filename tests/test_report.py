@@ -196,7 +196,7 @@ def test_numbers_in_the_text_must_be_values_of_the_own_evidence():
 
 
 def test_numbers_that_are_part_of_the_target_are_allowed():
-    result = checked(answer(rec(lever="search_term_new", target="SAP S/4", action="SAP S/4 als Begriff ergänzen.")),
+    result = checked(answer(rec(lever="search_term_new", target="Tabulix S/4", action="Tabulix S/4 als Begriff ergänzen.")),
                      terms=("Planer",))
     assert len(result.recommendations) == 1
 

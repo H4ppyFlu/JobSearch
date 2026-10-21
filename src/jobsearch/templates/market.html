@@ -21,21 +21,21 @@
 {% endif %}
 
 <h2>Skill-Gruppen</h2>
-<p class="muted">Aus dem neuesten Fit score aller ★★- und ★★★-Jobs. Je Job zählt eine Gruppe einmal pro Seite; „90 T“ heißt
+<p class="muted">Aus dem neuesten Fit score aller ★★- und ★★★-Jobs. Je Job zählt eine Gruppe einmal pro Seite; „davon“ bezieht sich auf „fehlt“, „90 T“ heißt
   die letzten {{ WINDOW_DAYS }} Tage. Eine Gruppe kann auf beiden Seiten stehen, weil verschiedene Anzeigen verschieden
   beurteilt wurden.</p>
 {% if skills %}
 <table>
   <tr><th>Gruppe</th><th style="text-align:right">fehlt 90 T</th><th style="text-align:right">fehlt</th>
-      <th style="text-align:right">vorhanden 90 T</th><th style="text-align:right">vorhanden</th>
       <th style="text-align:right">davon positiv</th>
-      <th style="text-align:right" class="hide-small">davon geringe Sicherheit</th></tr>
+      <th style="text-align:right" class="hide-small">davon geringe Sicherheit</th>
+      <th style="text-align:right">vorhanden 90 T</th><th style="text-align:right">vorhanden</th></tr>
   {% for r in skills %}
   <tr><td><a href="{{ url_for('market_group', name=r.group) }}">{{ r.group }}</a></td>
       <td style="text-align:right">{{ r.missing_recent }}</td><td style="text-align:right">{{ r.missing_total }}</td>
-      <td style="text-align:right">{{ r.matching_recent }}</td><td style="text-align:right">{{ r.matching_total }}</td>
       <td style="text-align:right">{{ r.positive }}</td>
-      <td style="text-align:right" class="hide-small">{{ r.low_confidence }}</td></tr>
+      <td style="text-align:right" class="hide-small">{{ r.low_confidence }}</td>
+      <td style="text-align:right">{{ r.matching_recent }}</td><td style="text-align:right">{{ r.matching_total }}</td></tr>
   {% endfor %}
 </table>
 {% else %}

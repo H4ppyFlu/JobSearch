@@ -1,6 +1,6 @@
 # Issue: Market report (skill groups and active companies)
 
-Status: in progress on branch `implement-market-report`. Parts 1 to 4 done.
+Status: in progress on branch `implement-market-report`. Parts 1 to 4 done, review fixes in. Open: the candidate's plausibility check.
 
 ## Goal
 

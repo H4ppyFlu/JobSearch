@@ -31,7 +31,7 @@ def score(conn, job_id, tier, low=False, reasoning="Passt gut."):
             """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, low_confidence,
                                        profile_hash, model, scored_at)
                VALUES (?, ?, ?, ?, ?, ?, 'h', 'claude-test', '2026-10-15T08:00:00')""",
-            (job_id, tier, reasoning, json.dumps(["Projektplanung"]), json.dumps(["SAP"]), int(low)),
+            (job_id, tier, reasoning, json.dumps(["Projektplanung"]), json.dumps(["Tabulix"]), int(low)),
         )
 
 
@@ -127,7 +127,7 @@ def test_detail_shows_postings_score_and_reopening_chain(client, conn):
     html = page(client, f"/job/{job}")
     assert "Anlagen planen und in Betrieb nehmen" in html  # the longest description
     assert "Deine Erfahrung in der Anlagenplanung passt genau." in html
-    assert "Projektplanung" in html and "SAP" in html
+    assert "Projektplanung" in html and "Tabulix" in html
     assert f'href="https://x/{job}"' in html and 'href="https://indeed.example/viewjob?jk=1"' in html
     assert "Bundesagentur" in html and "Indeed" in html
     assert f'href="/job/{earlier}"' in html  # Reopening of
@@ -359,10 +359,10 @@ def no_ai(monkeypatch):
 def market_data(conn):
     for title in ("A", "B", "C"):
         job = add_job(conn, title, company="Beispiel Technik GmbH", first_seen=date.today().isoformat())
-        score(conn, job, 2)  # missing SAP, matching Projektplanung
+        score(conn, job, 2)  # missing Tabulix, matching Projektplanung
     with conn:
         conn.executemany("INSERT INTO skill_groups (text, group_name) VALUES (?, ?)",
-                         [("SAP", "SAP / ERP"), ("SAP PM", "SAP / ERP")])
+                         [("Tabulix", "Tabulix / ERP"), ("Tabulix PM", "Tabulix / ERP")])
 
 
 def test_market_page_shows_companies_skill_groups_and_the_ungrouped_note(client, conn, no_ai):
@@ -371,14 +371,14 @@ def test_market_page_shows_companies_skill_groups_and_the_ungrouped_note(client,
     html = page(client, "/markt")
 
     assert "Beispiel Technik GmbH" in html and "Kandidat für companies.csv" in html
-    assert "SAP / ERP" in html and "/markt/gruppe?name=SAP+/+ERP" in html
+    assert "Tabulix / ERP" in html and "/markt/gruppe?name=Tabulix+/+ERP" in html
     assert "1 Skill-Text ist noch ohne Gruppe" in html and "jobsearch market" in html
 
 
 def test_market_group_detail_lists_its_original_texts(client, conn, no_ai):
     market_data(conn)
 
-    html = page(client, "/markt/gruppe?name=SAP+%2F+ERP")
+    html = page(client, "/markt/gruppe?name=Tabulix+%2F+ERP")
 
-    assert "SAP PM" in html and "SAP" in html and "--regroup" in html
+    assert "Tabulix PM" in html and "Tabulix" in html and "--regroup" in html
     assert client.get("/markt/gruppe?name=Unbekannt").status_code == 404

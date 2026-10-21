@@ -254,7 +254,7 @@ def _share(n: int, total: int) -> str:
     return f"{n} ({round(100 * n / total)} %)" if total and n else str(n)
 
 
-def _table(header: list[str], rows: list[tuple[str, list[str]]]) -> list[str]:
+def table(header: list[str], rows: list[tuple[str, list[str]]]) -> list[str]:
     width = max(len(label) for label, _ in rows) + 2
     cols = [max(len(h), *(len(values[i]) for _, values in rows)) for i, h in enumerate(header)]
 
@@ -286,14 +286,14 @@ def stage_report(conn: sqlite3.Connection, chosen: list[Period]) -> list[str]:
     rows.append(row("  Sammelanzeigen", lambda m: _share(m.generic, m.scored)))
     rows.append(row("Eligible, noch unbewertet", lambda m: str(m.unscored)))
     lines = ["Kennzahlen je Stufe (Jobs und Postings nach dem Tag, an dem sie zuerst gesehen wurden):"]
-    lines += _table([p.label for p in chosen], rows)
+    lines += table([p.label for p in chosen], rows)
     for period in chosen:
         terms = term_metrics(conn, period)
         if not terms:
             continue
         lines += ["", f"Suchbegriffe ({period.label}, nur Bundesagentur; ein Job zählt bei jedem Begriff, "
                       "der ihn fand):"]
-        lines += _table(["Jobs", "nur hier", "eligible", "★★★", "★★", "★", "positiv"],
+        lines += table(["Jobs", "nur hier", "eligible", "★★★", "★★", "★", "positiv"],
                         [(t.term, [str(t.jobs), str(t.only_here), str(t.eligible), str(t.tiers[3]),
                                         str(t.tiers[2]), str(t.tiers[1]), str(t.positive)]) for t in terms])
     return lines
@@ -352,7 +352,7 @@ def score_report(conn: sqlite3.Connection, chosen: list[Period], by: str | None 
             if lines:
                 lines.append("")
             lines.append(f"Fit score gegen Job status ({title}):")
-            lines += _table(["positiv", "negativ", "ohne Label"], rows)
+            lines += table(["positiv", "negativ", "ohne Label"], rows)
             top_labeled = t[(3, "positive")] + t[(3, "negative")]
             lines.append(f"Treffsicherheit ★★★: {_percent(t[(3, 'positive')], top_labeled)}")
             lines.append(f"Übersehen in ★: {t[(1, 'positive')]} von {positives} positiven")
@@ -557,17 +557,17 @@ def usage_report(conn: sqlite3.Connection, chosen: list[Period]) -> list[str]:
             ("  pro bewertetem Job", [usage.money(m.per_scored) for m in ms]),
             ("  pro ★★★/★★-Job (alle Zwecke)", [usage.money(m.per_good) for m in ms]),
             ("  pro ausgelesener Karriereseite", [usage.money(m.per_page) for m in ms])]
-    lines += [""] + _table([p.label for p in chosen], rows)
+    lines += [""] + table([p.label for p in chosen], rows)
     for period, m in zip(chosen, ms):
         if not m.total.calls:
             continue
         lines += ["", f"Nach Zweck ({period.label}; Grundlast = Cache-Tokens pro Aufruf):"]
-        lines += _table(usage.HEADER + ["Wiederholt", "Grundlast"],
+        lines += table(usage.HEADER + ["Wiederholt", "Grundlast"],
                         [(usage.PURPOSES.get(p, p), usage.values(u) + [_share(m.retries[p], u.calls),
                                                                       usage.tokens(m.cache_per_call.get(p, 0))])
                          for p, u in sorted(m.by_purpose.items(), key=lambda kv: -kv[1].cost_usd)])
         lines += ["", f"Nach Modell ({period.label}):"]
-        lines += _table(usage.HEADER, [(model, usage.values(u)) for model, u in sorted(m.by_model.items())])
+        lines += table(usage.HEADER, [(model, usage.values(u)) for model, u in sorted(m.by_model.items())])
         lines += ["", f"Nach Tag ({period.label}):"]
-        lines += _table(usage.HEADER, [(day, usage.values(u)) for day, u in sorted(m.by_day.items())])
+        lines += table(usage.HEADER, [(day, usage.values(u)) for day, u in sorted(m.by_day.items())])
     return lines

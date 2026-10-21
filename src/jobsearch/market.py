@@ -20,8 +20,7 @@ from importlib import resources
 
 from . import ai, db
 from .companies import normalize_company
-from .evaluation import Period, label
-from .evaluation import _table as evaluation_table
+from .evaluation import STARS, Period, label, table
 
 log = logging.getLogger(__name__)
 
@@ -75,15 +74,12 @@ def active_companies(conn: sqlite3.Connection, today: date) -> list[CompanySigna
     return sorted(active, key=lambda c: (-c.jobs, -c.reopenings, c.name.casefold()))
 
 
-STARS = {3: "★★★", 2: "★★", 1: "★", None: "–"}
-
-
 def company_report(companies: list[CompanySignal]) -> list[str]:
     title = f"Aktive Firmen (letzte {WINDOW_DAYS} Tage, Jobs in Reichweite, ohne Sammelanzeigen):"
     if not companies:
         return [title, f"  Keine aktiven Firmen: keine Firma mit {MIN_JOBS} oder mehr Jobs oder einem Reopening."]
     header = ("Firma", "Jobs", "bestes Tier", "Reopenings", "")
-    rows = [(c.name, str(c.jobs), STARS[c.best_tier], str(c.reopenings), c.note) for c in companies]
+    rows = [(c.name, str(c.jobs), STARS.get(c.best_tier, "–"), str(c.reopenings), c.note) for c in companies]
     widths = [max(len(row[i]) for row in (header, *rows)) for i in range(len(header))]
 
     def line(row: tuple[str, ...]) -> str:
@@ -125,11 +121,13 @@ def skill_text(item: str) -> str:
     return " ".join(item.split())
 
 
-def scored_skills(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """The newest Fit score of every ★★ and ★★★ Job, with its skill lists and the Job's status."""
+def scored_skills(conn: sqlite3.Connection, period: Period = Period("gesamt")) -> list[sqlite3.Row]:
+    """The newest Fit score of every ★★ and ★★★ Job first seen in the period, with its skill lists
+    and the Job's status."""
+    cond, params = period.where("j.first_seen")
     return conn.execute(
         f"""SELECT j.id, j.first_seen, j.status, s.low_confidence, s.missing_skills, s.matching_skills
-            FROM jobs j {NEWEST_SCORE} WHERE s.tier IN {GOOD_TIERS}""").fetchall()
+            FROM jobs j {NEWEST_SCORE} WHERE s.tier IN {GOOD_TIERS} AND {cond}""", params).fetchall()
 
 
 def skill_items(row: sqlite3.Row, column: str) -> list[str]:
@@ -140,11 +138,16 @@ def skill_items(row: sqlite3.Row, column: str) -> list[str]:
     return [t for t in (skill_text(i) for i in items if isinstance(i, str)) if t]
 
 
-def ungrouped_texts(conn: sqlite3.Connection) -> list[str]:
-    grouped = {r[0] for r in conn.execute("SELECT text FROM skill_groups")}
+def skill_texts(conn: sqlite3.Connection) -> list[str]:
+    """All distinct skill texts of the ★★/★★★ Jobs, grouped or not."""
     texts = {t for row in scored_skills(conn) for column in ("missing_skills", "matching_skills")
              for t in skill_items(row, column)}
-    return sorted(texts - grouped, key=str.casefold)
+    return sorted(texts, key=str.casefold)
+
+
+def ungrouped_texts(conn: sqlite3.Connection) -> list[str]:
+    grouped = {r[0] for r in conn.execute("SELECT text FROM skill_groups")}
+    return [t for t in skill_texts(conn) if t not in grouped]
 
 
 def build_prompt(texts: list[str], existing: list[str]) -> str:
@@ -175,37 +178,50 @@ class GroupingResult:
     error: str | None = None
 
 
-def group_skills(conn: sqlite3.Connection, *, model: str, ask=ai.ask, regroup: bool = False) -> GroupingResult:
+_INSERT = "INSERT INTO skill_groups (text, group_name, grouped_at, model) VALUES (?, ?, ?, ?)"
+
+
+def group_skills(conn: sqlite3.Connection, *, model: str, ask=None, regroup: bool = False) -> GroupingResult:
     """Group the skill texts that have no group yet, at most MAX_CALLS_PER_RUN calls of
-    MAX_SKILLS_PER_CALL texts each. What is left waits for the next run. `regroup` drops all groups first."""
-    if regroup:
-        with conn:
-            conn.execute("DELETE FROM skill_groups")
-    todo = ungrouped_texts(conn)
+    MAX_SKILLS_PER_CALL texts each, stored after each call. What is left waits for the next run.
+
+    `regroup` groups all texts from scratch and replaces the old groups only once every text has a
+    new one, so a failed call or a set too large for one run keeps the old groups."""
+    ask = ask or ai.ask  # looked up per call, so a patched ai.ask is seen
+    todo = skill_texts(conn) if regroup else ungrouped_texts(conn)
+    # The model may spell an existing group differently; the first spelling wins.
+    spelling = {} if regroup else {r[0].casefold(): r[0] for r in conn.execute("SELECT group_name FROM skill_groups")}
+    new_rows = []
     result = GroupingResult()
     while todo and result.calls < MAX_CALLS_PER_RUN:
         batch, todo = todo[:MAX_SKILLS_PER_CALL], todo[MAX_SKILLS_PER_CALL:]
-        existing = [r[0] for r in conn.execute("SELECT DISTINCT group_name FROM skill_groups ORDER BY group_name")]
         result.calls += 1
         try:
-            answer = ask(build_prompt(batch, existing), purpose="skill_groups", model=model, schema=SCHEMA,
-                         system=SYSTEM, check=check_answer(len(batch)))
+            answer = ask(build_prompt(batch, sorted(set(spelling.values()), key=str.casefold)), purpose="skill_groups",
+                         model=model, schema=SCHEMA, system=SYSTEM, check=check_answer(len(batch)))
         except ai.AiError as e:
             log.error("Skill grouping failed: %s", e)
             result.error = str(e)
             todo = batch + todo
             break
-        # The model may spell an existing group differently; the stored spelling wins.
-        spelling = {name.casefold(): name for name in existing}
-        rows = []
-        for g in answer.data["groups"]:
-            name = g["group"].strip()
-            name = spelling.setdefault(name.casefold(), name)
-            rows.append((batch[g["index"]], name, db.now(), answer.model))
+        rows = [(batch[g["index"]], spelling.setdefault(g["group"].strip().casefold(), g["group"].strip()),
+                 db.now(), answer.model) for g in answer.data["groups"]]
+        if regroup:
+            new_rows += rows
+            continue
         with conn:
-            conn.executemany("INSERT INTO skill_groups (text, group_name, grouped_at, model) VALUES (?, ?, ?, ?)", rows)
+            conn.executemany(_INSERT, rows)
         result.grouped += len(rows)
     result.left = len(todo)
+    if regroup:
+        if todo:
+            reason = result.error or f"{len(todo)} Texte passen nicht mehr in diesen Lauf"
+            result.error = f"Neu-Gruppierung nicht abgeschlossen, die bisherigen Gruppen bleiben: {reason}"
+        else:
+            with conn:
+                conn.execute("DELETE FROM skill_groups")
+                conn.executemany(_INSERT, new_rows)
+            result.grouped = len(new_rows)
     return result
 
 
@@ -231,36 +247,37 @@ class SkillRow:
     missing_total: int = 0
     matching_recent: int = 0
     matching_total: int = 0
-    positive: int = 0  # Jobs naming the group on either side whose label is positive
-    low_confidence: int = 0  # the same, with a Low-confidence score
+    positive: int = 0  # of the Jobs missing the group, those with a positive label
+    low_confidence: int = 0  # of the Jobs missing the group, those with a Low-confidence score
 
 
 def skill_table(conn: sqlite3.Connection, period: Period, today: date) -> list[SkillRow]:
     """Skill groups by how many Jobs miss them, most first. Ungrouped texts are left out (see ungrouped_texts)."""
     group_of = dict(conn.execute("SELECT text, group_name FROM skill_groups").fetchall())
-    cond, params = period.where("j.first_seen")
     start = window_start(today)
-    rows = conn.execute(
-        f"""SELECT j.first_seen, j.status, s.low_confidence, s.missing_skills, s.matching_skills
-            FROM jobs j {NEWEST_SCORE} WHERE s.tier IN {GOOD_TIERS} AND {cond}""", params)
-    table: dict[str, SkillRow] = {}
-    for r in rows:
-        recent = r["first_seen"] >= start
-        named = set()
-        for side in ("missing", "matching"):
-            for name in {group_of[t] for t in skill_items(r, f"{side}_skills") if t in group_of}:
-                row = table.setdefault(name, SkillRow(name))
-                setattr(row, f"{side}_total", getattr(row, f"{side}_total") + 1)
-                setattr(row, f"{side}_recent", getattr(row, f"{side}_recent") + recent)
-                named.add(name)
-        for name in named:
-            table[name].positive += label(r["status"]) == "positive"
-            table[name].low_confidence += bool(r["low_confidence"])
-    return sorted(table.values(), key=lambda row: (-row.missing_total, -row.matching_total, row.group.casefold()))
+    rows: dict[str, SkillRow] = {}
+
+    def groups_in(job: sqlite3.Row, column: str) -> list[SkillRow]:
+        names = {group_of[t] for t in skill_items(job, column) if t in group_of}
+        return [rows.setdefault(name, SkillRow(name)) for name in names]
+
+    for job in scored_skills(conn, period):
+        recent = job["first_seen"] >= start
+        for row in groups_in(job, "missing_skills"):
+            row.missing_total += 1
+            row.missing_recent += recent
+            row.positive += label(job["status"]) == "positive"
+            row.low_confidence += bool(job["low_confidence"])
+        for row in groups_in(job, "matching_skills"):
+            row.matching_total += 1
+            row.matching_recent += recent
+    return sorted(rows.values(), key=lambda row: (-row.missing_total, -row.matching_total, row.group.casefold()))
 
 
 def period_for(since: date | None, until: date | None) -> Period:
-    """The chosen period with a German label; `until` is the last day."""
+    """The chosen period with a German label; `until` is the last day. ValueError if it is empty."""
+    if since and until and since > until:
+        raise ValueError("--since liegt nach --until")
     if since and until:
         name = f"{since} bis {until}"
     else:
@@ -270,19 +287,19 @@ def period_for(since: date | None, until: date | None) -> Period:
 
 def skill_report(rows: list[SkillRow], ungrouped: int, period: Period) -> list[str]:
     title = (f"Skill-Gruppen (★★ und ★★★, {period.label}; je Job zählt eine Gruppe einmal pro Seite, "
-             f"\"90 T\" = letzte {WINDOW_DAYS} Tage):")
+             f"\"davon\" bezieht sich auf \"fehlt\", \"90 T\" = letzte {WINDOW_DAYS} Tage):")
     lines = [title]
     if rows:
-        lines += evaluation_table(
-            ["fehlt 90 T", "fehlt", "vorhanden 90 T", "vorhanden", "davon positiv", "davon geringe Sicherheit"],
-            [(f"  {r.group}", [str(v) for v in (r.missing_recent, r.missing_total, r.matching_recent,
-                                                r.matching_total, r.positive, r.low_confidence)])
+        lines += table(
+            ["fehlt 90 T", "fehlt", "davon positiv", "davon geringe Sicherheit", "vorhanden 90 T", "vorhanden"],
+            [(f"  {r.group}", [str(v) for v in (r.missing_recent, r.missing_total, r.positive, r.low_confidence,
+                                                r.matching_recent, r.matching_total)])
              for r in rows[:TOP_GROUPS]])
         if len(rows) > TOP_GROUPS:
             lines.append(f"  … und {len(rows) - TOP_GROUPS} weitere Gruppen (alle im Dashboard unter \"Markt\")")
     else:
         lines.append("  Keine Skill-Gruppen im Zeitraum.")
-    lines.append(f"  ohne Gruppe: {ungrouped}")
+    lines.append(f"  ohne Gruppe (Texte, alle Zeiträume): {ungrouped}")
     return lines
 
 

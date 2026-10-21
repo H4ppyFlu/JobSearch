@@ -385,13 +385,17 @@ def cmd_market(cfg: Config, regroup: bool = False, since: date | None = None, un
     is printed anyway with what is grouped so far. Returns 1 if the AI step failed."""
     from . import market
 
+    try:
+        period = market.period_for(since, until)
+    except ValueError as e:  # checked before any AI call
+        print(e, file=sys.stderr)
+        return 2
     conn = db.connect(cfg.db_path)
     result = market.group_skills(conn, model=cfg.model_extraction, ask=ask or recording_ask(conn), regroup=regroup)
     today = today or date.today()
     print("\n".join(market.company_report(market.active_companies(conn, today))))
     print()
     print(market.grouping_summary(result))
-    period = market.period_for(since, until)
     print("\n".join(market.skill_report(market.skill_table(conn, period, today), len(market.ungrouped_texts(conn)),
                                         period)))
     if result.error:

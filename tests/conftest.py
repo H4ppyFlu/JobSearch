@@ -93,7 +93,7 @@ class FakeAi:
             raise ai.AiError(self.fail)
         record_usage(usage_recorder, purpose)
         data = {"scores": [{"job_id": j["job_id"], "tier": self.tier, "reasoning": "Passt gut zu deinem Profil.",
-                            "matching_skills": ["Projektplanung"], "missing_skills": ["SAP"],
+                            "matching_skills": ["Projektplanung"], "missing_skills": ["Tabulix"],
                             "part_time": "unknown", "remote": self.remote,
                             "generic": j["job_id"] in self.generic, "same_as_candidate": j["job_id"] in self.same,
                             "injection_suspected": j["job_id"] in self.suspected}

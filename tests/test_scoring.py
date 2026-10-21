@@ -54,7 +54,7 @@ def test_stored_score(conn, cfg):
     run_scoring(conn, cfg, ask=FakeAi(tier=3, remote="hybrid"))
     score = dict(conn.execute("SELECT * FROM fit_scores").fetchone())
     assert (score["job_id"], score["tier"], score["model"], score["low_confidence"]) == (job, 3, "claude-test", 0)
-    assert json.loads(score["missing_skills"]) == ["SAP"]
+    assert json.loads(score["missing_skills"]) == ["Tabulix"]
     assert len(score["profile_hash"]) == 16
     assert conn.execute("SELECT remote_type FROM jobs").fetchone()[0] == "hybrid"
 
@@ -111,7 +111,7 @@ def test_digest_and_toast(conn, cfg, tmp_path):
     text = path.read_text(encoding="utf-8")
     assert "## ★★★ Sehr passend (1)" in text
     assert "[Projektingenieur](https://x/" in text
-    assert "**Fehlt:** SAP" in text
+    assert "**Fehlt:** Tabulix" in text
     assert "Warten auf Bewertung: 1." in text
     assert notify.message(report, counts) == ("JobSearch", "Neu: 1× ★★★\n1 Jobs warten auf Bewertung")
 
