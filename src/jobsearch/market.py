@@ -52,10 +52,12 @@ def window_start(today: date) -> str:
 
 def active_companies(conn: sqlite3.Connection, today: date) -> list[CompanySignal]:
     """Companies with MIN_JOBS or more eligible Jobs first seen in the window, or a Reopening there.
+    Sorted out Jobs do not count.
     Most Jobs first. Nothing is written to companies.csv; the note only names candidates."""
     rows = conn.execute(
         f"""SELECT j.company, j.is_target_company, j.reopening_of, s.tier FROM jobs j {NEWEST_SCORE}
-            WHERE j.eligibility = 'eligible' AND j.is_generic = 0 AND j.first_seen >= ?""", (window_start(today),))
+            WHERE j.eligibility = 'eligible' AND j.is_generic = 0 AND j.first_seen >= ?
+              AND coalesce(s.sorted_out, 0) = 0""", (window_start(today),))
     found: dict[tuple[str, ...], CompanySignal] = {}
     for r in rows:
         key = normalize_company(r["company"])

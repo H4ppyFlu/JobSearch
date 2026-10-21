@@ -25,13 +25,14 @@ def client(cfg, conn):
     return app.test_client()
 
 
-def score(conn, job_id, tier, low=False, reasoning="Passt gut."):
+def score(conn, job_id, tier, low=False, reasoning="Passt gut.", sorted_out=False):
     with conn:
         conn.execute(
             """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, low_confidence,
-                                       profile_hash, model, scored_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'h', 'claude-test', '2026-10-15T08:00:00')""",
-            (job_id, tier, reasoning, json.dumps(["Projektplanung"]), json.dumps(["Tabulix"]), int(low)),
+                                       sorted_out, profile_hash, model, scored_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'h', 'claude-test', '2026-10-15T08:00:00')""",
+            (job_id, tier, reasoning, json.dumps(["Projektplanung"]), json.dumps(["Tabulix"]), int(low),
+             int(sorted_out)),
         )
 
 
@@ -382,3 +383,29 @@ def test_market_group_detail_lists_its_original_texts(client, conn, no_ai):
 
     assert "Tabulix PM" in html and "Tabulix" in html and "--regroup" in html
     assert client.get("/markt/gruppe?name=Unbekannt").status_code == 404
+
+
+def test_a_sorted_out_job_is_hidden_until_the_candidate_sets_a_status(client, conn):
+    off = add_job(conn, "Koch Aussortiert")
+    score(conn, off, 1, sorted_out=True)
+    score(conn, add_job(conn, "Sachbearbeiter Schwach"), 1)
+    for url in ("/", "/?tier=1"):
+        html = page(client, url)
+        assert "Sachbearbeiter Schwach" in html and "Koch Aussortiert" not in html
+    html = page(client, "/?tier=sorted_out")
+    assert "Koch Aussortiert" in html and "Sachbearbeiter Schwach" not in html
+    with conn:
+        conn.execute("UPDATE jobs SET status = 'not_interesting' WHERE id = ?", (off,))
+    html = page(client)
+    assert "Koch Aussortiert" in html and ">aussortiert</span>" in html
+    assert "Koch Aussortiert" not in page(client, "/?tier=sorted_out")
+
+
+def test_the_detail_page_says_the_ai_sorted_the_job_out(client, conn):
+    off = add_job(conn, "Koch")
+    score(conn, off, 1, sorted_out=True, reasoning="Anderes Berufsfeld.")
+    kept = add_job(conn, "Sachbearbeiter")
+    score(conn, kept, 1)
+    html = page(client, f"/job/{off}")
+    assert "Von der KI aussortiert" in html and "Anderes Berufsfeld." in html
+    assert "Von der KI aussortiert" not in page(client, f"/job/{kept}")

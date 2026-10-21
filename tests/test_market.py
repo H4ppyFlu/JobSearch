@@ -41,12 +41,23 @@ def test_old_generic_and_ineligible_jobs_do_not_count(conn):
     assert [c.jobs for c in active_companies(conn, TODAY)] == [3]
 
 
-def add_score(conn, job_id, tier, scored_at="2026-10-02T08:00:00", missing=(), matching=(), low_confidence=False):
+def add_score(conn, job_id, tier, scored_at="2026-10-02T08:00:00", missing=(), matching=(), low_confidence=False,
+              sorted_out=False):
     with conn:
         conn.execute(
             """INSERT INTO fit_scores (job_id, tier, reasoning, matching_skills, missing_skills, low_confidence,
-                                       profile_hash, model, scored_at) VALUES (?, ?, 'Passt.', ?, ?, ?, 'ppp', 'claude-test', ?)""",
-            (job_id, tier, json.dumps(list(matching)), json.dumps(list(missing)), int(low_confidence), scored_at))
+                                       sorted_out, profile_hash, model, scored_at)
+               VALUES (?, ?, 'Passt.', ?, ?, ?, ?, 'ppp', 'claude-test', ?)""",
+            (job_id, tier, json.dumps(list(matching)), json.dumps(list(missing)), int(low_confidence),
+             int(sorted_out), scored_at))
+
+
+def test_a_sorted_out_job_does_not_count_towards_an_active_company(conn):
+    jobs = [add_job(conn, t, company="Beispiel Technik GmbH", first_seen="2026-10-01") for t in ("A", "B", "C")]
+    add_score(conn, jobs[2], 1, sorted_out=True)
+    assert active_companies(conn, TODAY) == []
+    add_score(conn, jobs[2], 1, scored_at="2026-10-05T08:00:00")  # rescored, no longer sorted out
+    assert [c.jobs for c in active_companies(conn, TODAY)] == [3]
 
 
 def test_a_single_reopening_makes_a_company_active(conn):

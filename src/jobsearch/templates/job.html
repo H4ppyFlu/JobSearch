@@ -38,7 +38,8 @@
 {% if score %}
 <div class="card">
   <h2 style="margin-top:0;font-size:17px"><span class="tier">{{ "★" * score.tier }}</span> Bewertung
-    {%- if score.low_confidence %} <span class="badge">geringe Sicherheit</span>{% endif %}</h2>
+    {%- if score.low_confidence %} <span class="badge">geringe Sicherheit</span>{% endif %}
+    {%- if score.sorted_out %} <span class="badge">Von der KI aussortiert</span>{% endif %}</h2>
   <p>{{ score.reasoning }}</p>
   {% if score.matching %}<p><strong>Passt:</strong> {{ score.matching|join(", ") }}</p>{% endif %}
   {% if score.missing %}<p><strong>Fehlt:</strong> {{ score.missing|join(", ") }}</p>{% endif %}

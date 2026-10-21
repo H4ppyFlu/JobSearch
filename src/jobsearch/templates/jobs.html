@@ -32,6 +32,7 @@
         {%- if job.id > baseline %} <span class="badge new">neu</span>{% endif %}
         {%- if job.is_target_company %} <span class="badge target">Zielunternehmen</span>{% endif %}
         {%- if job.low_confidence %} <span class="badge">geringe Sicherheit</span>{% endif %}
+        {%- if job.sorted_out %} <span class="badge">aussortiert</span>{% endif %}
         {%- if job.is_generic %} <span class="badge">Sammelanzeige</span>{% endif %}
         {%- if job.reopening_of %} <span class="badge">wieder ausgeschrieben</span>{% endif %}
         <br><span class="muted">{{ job.company }}</span></td>

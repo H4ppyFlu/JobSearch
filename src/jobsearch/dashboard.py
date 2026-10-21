@@ -30,7 +30,9 @@ STATUS_LABELS = {"new": "neu", "interesting": "interessant", "not_interesting": 
 ELIGIBILITY_LABELS = {"reach": "in Reichweite oder unklar", "eligible": "in Reichweite", "unclear": "unklar",
                       "ineligible": "außerhalb", "all": "alle"}
 SOURCE_LABELS = {"bundesagentur": "Bundesagentur", "indeed": "Indeed", "career_page": "Karriereseite"}
-TIER_LABELS = {"3": "★★★", "2": "★★", "1": "★", "none": "unbewertet"}
+TIER_LABELS = {"3": "★★★", "2": "★★", "1": "★", "none": "unbewertet", "sorted_out": "aussortiert"}
+# Sorted out Jobs are hidden until the candidate sets a Job status.
+HIDDEN_SORTED_OUT = "(f.sorted_out = 1 AND j.status = 'new')"
 
 
 def job_filter(args) -> tuple[str, list, dict]:
@@ -44,9 +46,13 @@ def job_filter(args) -> tuple[str, list, dict]:
         "term": args.get("term", ""),
         "since": args.get("since", ""),
     }
+    if chosen["tier"] == "sorted_out":
+        where.append(HIDDEN_SORTED_OUT)
+    else:
+        where.append(f"NOT coalesce({HIDDEN_SORTED_OUT}, 0)")
     if chosen["tier"] == "none":
         where.append("f.tier IS NULL")
-    elif chosen["tier"] in TIER_LABELS:
+    elif chosen["tier"] in ("1", "2", "3"):
         where.append("f.tier = ?")
         params.append(int(chosen["tier"]))
     if chosen["status"] in STATUS_LABELS:
@@ -168,7 +174,7 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
     def jobs():
         where, params, chosen = job_filter(request.args)
         rows = conn().execute(
-            f"""SELECT j.*, f.tier, f.low_confidence FROM jobs j {LATEST_SCORE} WHERE {where}
+            f"""SELECT j.*, f.tier, f.low_confidence, f.sorted_out FROM jobs j {LATEST_SCORE} WHERE {where}
                 ORDER BY f.tier IS NULL, f.tier DESC, j.first_seen DESC, j.id DESC""",
             params,
         ).fetchall()
