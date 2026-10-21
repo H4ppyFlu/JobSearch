@@ -252,7 +252,7 @@ def test_no_recommendation_is_a_valid_answer():
 # --- Making the report ---------------------------------------------------------------------------
 
 from jobsearch import ai  # noqa: E402
-from jobsearch.report import latest_report, make_report  # noqa: E402
+from jobsearch.report import last_period_end, latest_report, make_report  # noqa: E402
 
 
 class ReportAi:
@@ -458,3 +458,32 @@ def test_history_reaches_back_four_reports(conn, cfg):
     reports = {h["report"] for h in json.loads(report_input(conn, TODAY, cfg.found_elsewhere_path, None,
                                                             ["Planer"]).to_prompt_json())["history"]}
     assert reports == {"2026-09-08", "2026-09-15", "2026-09-22", "2026-09-29"}
+
+
+def test_before_and_after_windows_have_the_same_length(conn, cfg):
+    ids = stored_report(conn, cfg, rec(evidence=("term.planer.jobs.all",)))
+    rec_id = ids[("change", "search_term_off")]
+    decide(conn, cfg, rec_id, "accepted", __import__("datetime").datetime(2026, 10, 21, 18, 0))
+    early = add_job(conn, "Planer früh", first_seen="2026-10-13")  # 8 days before: the after window is 21..28
+    found_by(conn, early, "Planer")
+    m = by_id(report_input(conn, date(2026, 10, 28), cfg.found_elsewhere_path, None, []))
+    assert m[f"rec.{rec_id}.term.planer.jobs.before"].value == 7  # the six from week_data and the early one
+
+
+def test_migration_008_adds_the_report_tables_to_an_existing_database(tmp_path):
+    import sqlite3
+
+    from jobsearch import db
+
+    path = tmp_path / "old.sqlite"
+    old = sqlite3.connect(path)
+    for version, sql in db._migrations():
+        if version <= 7:
+            old.executescript(sql)
+    old.execute("PRAGMA user_version = 7")
+    old.execute("INSERT INTO runs (kind, started_at) VALUES ('daily', '2026-10-14T08:00:00')")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    assert conn.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
+    assert last_period_end(conn) is None and latest_report(conn) is None

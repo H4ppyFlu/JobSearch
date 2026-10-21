@@ -154,6 +154,15 @@ def _funnel(inp: ReportInput, traces: list[Trace], key: str, name: str, period: 
         inp.add(f"funnel.{stage}.{key}", n, len(traces), f"Fremdfunde: {STAGES[stage][0]} ({name})")
 
 
+def _collect(inp: ReportInput, conn: sqlite3.Connection, key: str, name: str, period: Period,
+             active: set[str] | None, traces: list[Trace]) -> None:
+    """Every metric for one period, with `key` as the IDs' last part."""
+    _stages(inp, conn, key, name, period)
+    _terms(inp, conn, key, name, period, active)
+    _scores(inp, conn, key, name, period)
+    _funnel(inp, traces, key, name, period)
+
+
 def report_input(conn: sqlite3.Connection, today: date, found_path: Path, last_report_at: str | None,
                  active_terms: list[str]) -> ReportInput:
     inp = ReportInput()
@@ -162,12 +171,15 @@ def report_input(conn: sqlite3.Connection, today: date, found_path: Path, last_r
     inp.changes = [c for c in changes(snapshots(conn)) if c.day >= since]
     traces = _traces(conn, found_path)
     for key, name, period in reversed(_periods(today)):  # the whole history first, so slugs follow its order
-        _stages(inp, conn, key, name, period)
-        _terms(inp, conn, key, name, period, active)
-        _scores(inp, conn, key, name, period)
-        _funnel(inp, traces, key, name, period)
+        _collect(inp, conn, key, name, period, active, traces)
     _history(inp, conn, today, traces)
     return inp
+
+
+def build_input(conn: sqlite3.Connection, cfg: Config, today: date) -> ReportInput:
+    """The input as the next report would get it."""
+    terms, _ = term_and_exclusion_lists(conn, cfg)
+    return report_input(conn, today, cfg.found_elsewhere_path, last_period_end(conn), terms)
 
 
 HISTORY_REPORTS = 4  # earlier reports whose Recommendations go into the next input
@@ -198,23 +210,21 @@ def _history(inp: ReportInput, conn: sqlite3.Connection, today: date, traces: li
 def _effect(inp: ReportInput, conn: sqlite3.Connection, today: date, rec: sqlite3.Row,
             traces: list[Trace]) -> None:
     decided = date.fromisoformat(rec["decided_at"][:10])
-    days = (today - decided).days
-    if not EFFECT_AFTER_DAYS <= days <= EFFECT_UNTIL_DAYS:
+    if not EFFECT_AFTER_DAYS <= (today - decided).days <= EFFECT_UNTIL_DAYS:
         return
+    days = (today - decided).days + 1  # the after window runs from the decision day through today
     families = {e.rsplit(".", 1)[0] for e in json.loads(rec["evidence_json"])}
     windows = (("before", "vor der Änderung", Period("vorher", (decided - timedelta(days=days)).isoformat(),
                                                      decided.isoformat())),
                ("after", "nach der Änderung", Period("nachher", decided.isoformat(),
-                                                     (today + timedelta(days=1)).isoformat())))
+                                                     (decided + timedelta(days=days)).isoformat())))
     for key, name, period in windows:
         window = ReportInput(terms=dict(inp.terms))  # same slugs as the main input
-        _stages(window, conn, key, name, period)
-        _terms(window, conn, key, name, period, None)
-        _scores(window, conn, key, name, period)
-        _funnel(window, traces, key, name, period)
+        _collect(window, conn, key, name, period, None, traces)
         for m in window.metrics:
             if m.id.rsplit(".", 1)[0] in families:
-                inp.add(f"rec.{rec['id']}.{m.id}", m.value, m.n, f"Empfehlung {rec['id']}: {m.label}", keep_empty=True)
+                inp.add(f"rec.{rec['id']}.{m.id}", m.value, m.n, f"Empfehlung {rec['id']}: {m.label}",
+                        keep_empty=True)
 
 
 # --- The answer ----------------------------------------------------------------------------------
@@ -386,7 +396,7 @@ class ReportResult:
     error: str | None = None
 
 
-def targets(conn: sqlite3.Connection, cfg: Config) -> tuple[list[str], list[str]]:
+def term_and_exclusion_lists(conn: sqlite3.Connection, cfg: Config) -> tuple[list[str], list[str]]:
     """The active Search terms and the exclusion list, as the Daily run sees them."""
     manual = config.read_list_file(cfg.search_terms_path) if cfg.search_terms_path.exists() else []
     exclusions = config.read_list_file(cfg.exclusions_path) if cfg.exclusions_path.exists() else []
@@ -407,8 +417,7 @@ def report_due(conn: sqlite3.Connection, today: date, interval_days: int) -> boo
 
 def make_report(conn: sqlite3.Connection, cfg: Config, today: date, ask=ai.ask) -> ReportResult:
     """One AI call, the checks, the rows and the Markdown file. An AI failure is stored, never raised."""
-    terms, exclusions = targets(conn, cfg)
-    inp = report_input(conn, today, cfg.found_elsewhere_path, last_period_end(conn), terms)
+    inp = build_input(conn, cfg, today)
     with conn:
         report_id = conn.execute(
             """INSERT INTO reports (created_at, period_start, period_end, prompt_hash, input_json)
@@ -426,7 +435,7 @@ def make_report(conn: sqlite3.Connection, cfg: Config, today: date, ask=ai.ask) 
         with conn:
             conn.execute("UPDATE reports SET error = ? WHERE id = ?", (result.error, report_id))
         return result
-    checked = check_answer(answer.data, inp, terms, exclusions)
+    checked = check_answer(answer.data, inp, *term_and_exclusion_lists(conn, cfg))
     for reason in checked.dropped:
         log.info("Weekly report dropped %s", reason)
     result.counts = ReportCounts(len(checked.recommendations), len(checked.dropped), len(checked.new_levers))
@@ -479,6 +488,37 @@ class Report:
     dropped: list[str]
     counts: ReportCounts
 
+    @property
+    def week(self) -> tuple[int, int]:
+        return week_of(self.period_end)
+
+    @property
+    def made(self) -> str:
+        return _made(self.created_at)
+
+
+def week_of(period_end: str) -> tuple[int, int]:
+    """Year and ISO week a report is named after."""
+    year, week, _ = date.fromisoformat(period_end).isocalendar()
+    return year, week
+
+
+def _made(created_at: str) -> str:
+    return created_at[:16].replace("T", " ")
+
+
+@dataclass(frozen=True)
+class ReportEntry:
+    id: int
+    week: tuple[int, int]
+    made: str
+
+
+def list_reports(conn: sqlite3.Connection) -> list[ReportEntry]:
+    """Every report whose AI call worked, newest first."""
+    return [ReportEntry(r["id"], week_of(r["period_end"]), _made(r["created_at"])) for r in conn.execute(
+        "SELECT id, period_end, created_at FROM reports WHERE answer_json IS NOT NULL ORDER BY id DESC")]
+
 
 def load_report(conn: sqlite3.Connection, report_id: int) -> Report:
     row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
@@ -496,8 +536,8 @@ def load_report(conn: sqlite3.Connection, report_id: int) -> Report:
 
 def latest_report(conn: sqlite3.Connection) -> Report | None:
     """The newest report whose AI call worked."""
-    report_id = conn.execute("SELECT max(id) FROM reports WHERE answer_json IS NOT NULL").fetchone()[0]
-    return load_report(conn, report_id) if report_id else None
+    entries = list_reports(conn)
+    return load_report(conn, entries[0].id) if entries else None
 
 
 def _evidence_table(evidence: list[Metric]) -> list[str]:
@@ -506,9 +546,9 @@ def _evidence_table(evidence: list[Metric]) -> list[str]:
 
 
 def render(report: Report) -> str:
-    year, week, _ = date.fromisoformat(report.period_end).isocalendar()
+    year, week = report.week
     lines = [f"# Wochenbericht KW {week}/{year}", "",
-             f"Zeitraum {report.period_start} bis {report.period_end}, erstellt {report.created_at[:16]} "
+             f"Zeitraum {report.period_start} bis {report.period_end}, erstellt {report.made} "
              f"mit {report.model}.", "", "## Einschätzung", "", report.summary]
     if report.summary_evidence:
         lines += _evidence_table(report.summary_evidence)
@@ -534,7 +574,7 @@ def render(report: Report) -> str:
 def write_report(conn: sqlite3.Connection, reports_dir: Path, report_id: int) -> Path:
     """data/reports/YYYY-Www.md; a second report in the same week replaces the file, the rows stay."""
     report = load_report(conn, report_id)
-    year, week, _ = date.fromisoformat(report.period_end).isocalendar()
+    year, week = report.week
     reports_dir.mkdir(parents=True, exist_ok=True)
     path = reports_dir / f"{year}-W{week:02d}.md"
     path.write_text(render(report), encoding="utf-8")
@@ -548,6 +588,11 @@ def write_report(conn: sqlite3.Connection, reports_dir: Path, report_id: int) ->
 APPLIED = {"search_term_off": ("search_terms_path", "-{}"), "search_term_new": ("search_terms_path", "{}"),
            "exclusion": ("exclusions_path", "{}")}
 DECISIONS = ("accepted", "rejected")
+
+
+def applied_file(cfg: Config, lever: str) -> Path:
+    """The private file an applied Lever writes to."""
+    return getattr(cfg, APPLIED[lever][0])
 
 
 class DecisionError(Exception):
@@ -574,8 +619,7 @@ def decide(conn: sqlite3.Connection, cfg: Config, rec_id: int, decision: str, no
         target = row["target"].strip()
         if not target or any(c in target for c in "\r\n") or target[0] in "#-":
             raise DecisionError(f"'{target}' lässt sich nicht als Zeile eintragen. Bitte von Hand ändern.")
-        attribute, line = APPLIED[row["lever"]]
-        _append_line(getattr(cfg, attribute), line.format(target))
+        _append_line(applied_file(cfg, row["lever"]), APPLIED[row["lever"]][1].format(target))
     with conn:
         conn.execute("UPDATE recommendations SET decision = ?, decided_at = ? WHERE id = ?",
                      (decision, now.isoformat(timespec="seconds"), rec_id))

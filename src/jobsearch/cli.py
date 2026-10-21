@@ -219,9 +219,14 @@ def weekly_report(cfg: Config, conn, ask=ai.ask) -> None:
 
     if not report.report_due(conn, date.today(), cfg.report_interval_days):
         return
-    result = report.make_report(conn, cfg, date.today(), ask=ask)
-    if result.error:
-        print(f"Wochenbericht fehlgeschlagen, der nächste Lauf versucht es erneut: {result.error}", file=sys.stderr)
+    try:
+        result = report.make_report(conn, cfg, date.today(), ask=ask)
+        error = result.error
+    except Exception as e:  # the collected Jobs and the Digest matter more than the report
+        log.exception("Weekly report failed")
+        error = str(e)
+    if error:
+        print(f"Wochenbericht fehlgeschlagen, der nächste Lauf versucht es erneut: {error}", file=sys.stderr)
         return
     print(f"Wochenbericht: {result.path}")
     toast("JobSearch", f"Wochenbericht: {result.counts.recommendations} Empfehlungen",
@@ -257,9 +262,7 @@ def cmd_report(cfg: Config, dry_run: bool = False, ask=ai.ask) -> int:
 
     conn = db.connect(cfg.db_path)
     if dry_run:
-        terms, _ = report.targets(conn, cfg)
-        print(report.report_input(conn, date.today(), cfg.found_elsewhere_path, report.last_period_end(conn),
-                                  terms).to_prompt_json())
+        print(report.build_input(conn, cfg, date.today()).to_prompt_json())
         return 0
     print("Wochenbericht: 1 Aufruf an Claude ...")
     result = report.make_report(conn, cfg, date.today(), ask=ask)

@@ -30,11 +30,11 @@
 <div class="card"><p>Noch kein Wochenbericht. Der Daily run erstellt ihn, sobald er fällig ist, oder von Hand mit
   <code>jobsearch report</code>.</p></div>
 {% else %}
-{% set year, week, _ = weeks[report.id] %}
+{% set year, week = report.week %}
 <div class="card">
   <h1 style="margin:0 0 4px;font-size:22px">Wochenbericht KW {{ week }}/{{ year }}</h1>
   <div class="muted">Zeitraum {{ report.period_start }} bis {{ report.period_end }}, erstellt
-    {{ report.created_at[:16]|replace("T", " ") }} mit {{ report.model }}.
+    {{ report.made }} mit {{ report.model }}.
     Die Werte kommen aus der Datenbank, die KI hat nur die Kennzahlen genannt.</div>
 </div>
 
@@ -80,13 +80,13 @@
   <details><summary>Gründe</summary><ul>{% for d in report.dropped %}<li>{{ d }}</li>{% endfor %}</ul></details>{% endif %}</p>
 {% endif %}
 
-{% if weeks|length > 1 %}
+{% if entries|length > 1 %}
 <div class="card">
   <h2 style="margin-top:0;font-size:17px">Alle Berichte</h2>
-  <ul>{% for id, (y, w, _) in weeks.items() %}
-    <li><a href="{{ url_for('report_page', report_id=id) }}">KW {{ w }}/{{ y }}</a>
-      <span class="muted">erstellt {{ created[id] }}</span>
-      {%- if report and id == report.id %} <span class="muted">(angezeigt)</span>{% endif %}</li>
+  <ul>{% for e in entries %}
+    <li><a href="{{ url_for('report_page', report_id=e.id) }}">KW {{ e.week[1] }}/{{ e.week[0] }}</a>
+      <span class="muted">erstellt {{ e.made }}</span>
+      {%- if report and e.id == report.id %} <span class="muted">(angezeigt)</span>{% endif %}</li>
   {% endfor %}</ul>
 </div>
 {% endif %}

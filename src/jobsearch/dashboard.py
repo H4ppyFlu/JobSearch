@@ -209,20 +209,16 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
     def report_page(report_id: int | None = None, notice: str | None = None, code: int = 200):
         from . import report
 
-        finished = conn().execute(
-            "SELECT id, period_end, created_at FROM reports WHERE answer_json IS NOT NULL ORDER BY id DESC").fetchall()
-        ids = [r["id"] for r in finished]
+        entries = report.list_reports(conn())
+        ids = [e.id for e in entries]
         if report_id is None:
             report_id = ids[0] if ids else None
         elif report_id not in ids:
             abort(404)
         shown = report.load_report(conn(), report_id) if report_id else None
-        weeks = {r["id"]: date.fromisoformat(r["period_end"]).isocalendar() for r in finished}
-        created = {r["id"]: r["created_at"][:16].replace("T", " ") for r in finished}
-        files = {lever: getattr(cfg, attr).name for lever, (attr, _) in report.APPLIED.items()}
-        return render_template("report.html", report=shown, weeks=weeks, created=created, token=token,
-                               notice=notice, LEVER_LABELS=report.LEVER_LABELS, APPLIED=report.APPLIED,
-                               files=files), code
+        files = {lever: report.applied_file(cfg, lever).name for lever in report.APPLIED}
+        return render_template("report.html", report=shown, entries=entries, token=token, notice=notice,
+                               LEVER_LABELS=report.LEVER_LABELS, APPLIED=report.APPLIED, files=files), code
 
     @app.post("/empfehlung/<int:rec_id>")
     def decide(rec_id: int):
@@ -244,9 +240,9 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
 
     @app.post("/job/<int:job_id>/status")
     def set_status(job_id: int):
+        check_token()
         status = request.form.get("status", "")
-        sent = request.form.get("token", "").encode()
-        if not hmac.compare_digest(sent, token.encode()) or status not in STATUS_LABELS:
+        if status not in STATUS_LABELS:
             abort(400)
         note = request.form.get("note", "").strip()
         stamp = now()

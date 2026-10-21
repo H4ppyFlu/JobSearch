@@ -131,3 +131,11 @@ def test_no_weekly_report_without_scoring(cfg, toasts):
     fake = DailyAi()
     cmd_daily(cfg, score=False, career="off", client=RecordingClient(), ask=fake)
     assert "weekly_report" not in fake.purposes
+
+
+def test_any_weekly_report_error_leaves_the_run_alone(cfg, toasts, capsys, monkeypatch):
+    def broken(*args, **kwargs):
+        raise OSError("Datei gesperrt")
+    monkeypatch.setattr("jobsearch.report.make_report", broken)
+    assert cmd_daily(cfg, score=True, career="off", client=RecordingClient(), ask=DailyAi()) == 0
+    assert "Wochenbericht fehlgeschlagen" in capsys.readouterr().err
