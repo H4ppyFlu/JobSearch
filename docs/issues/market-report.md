@@ -28,7 +28,7 @@ It is a command of its own, `jobsearch market`, and a dashboard page "Markt". It
 
 ### Storage
 
-- Migration with the next free number: `skill_groups(text TEXT PRIMARY KEY, group_name TEXT NOT NULL, grouped_at, model)`. `text` is the skill item as stored, whitespace collapsed. One row per distinct text, so a text is grouped once and keeps its group.
+- Migration `009` (or `008` if this issue is implemented before `weekly-report`; `ai-usage` takes `007`): `skill_groups(text TEXT PRIMARY KEY, group_name TEXT NOT NULL, grouped_at, model)`. `text` is the skill item as stored, whitespace collapsed. One row per distinct text, so a text is grouped once and keeps its group.
 
 ### Grouping
 
@@ -37,7 +37,7 @@ It is a command of its own, `jobsearch market`, and a dashboard page "Markt". It
 - New prompt `src/jobsearch/prompts/skill_groups.md`. The model assigns each text to an existing group or creates a new one. Group names are German, with technical terms kept in their original form. A group is something one can learn or show in a CV: a tool, a method, a language, a field. Groups as broad as "IT-Kenntnisse" are not allowed.
 - **Third-party text.** The skill texts were written by the model from job ads, so an ad can steer them. They reach the model only inside the prompt's JSON, and the prompt gets the usual "Third-party text" section. `check-injection` is not extended: the worst outcome is a wrong group, and the code checks the mapping.
 - Schema: a list of `{index, group}`. Each text gets an index in the prompt and the answer refers to it, not to the text (as in the career setup), so the model cannot tidy up a text.
-- **Check in code:** every index sent is answered exactly once and no other index appears; group names are non-empty and at most 60 characters. A failing answer gets one retry through `ai.ask()`'s usual path, then the texts stay ungrouped.
+- **Check in code:** every index sent is answered exactly once and no other index appears; group names are non-empty and at most 60 characters. A failing answer gets one retry through `ai.ask()`'s usual path, then the texts stay ungrouped. Calls pass `purpose="skill_groups"` (see `ai-usage.md`).
 - `jobsearch market --regroup` deletes all rows and groups everything again, with the same limits per run.
 
 ### When the AI fails

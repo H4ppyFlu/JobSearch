@@ -21,7 +21,7 @@ Four rules shape the design:
 - The Digest is written from the database to `data/digests/`; the report works the same way.
 - The dashboard (`dashboard.py`) protects writes with a token created at each start and listens on `127.0.0.1` only. `scheduler.RunLock` is the file lock that keeps runs from overlapping.
 - The Lever table in `docs/issues/eval.md` ("Stage → Lever") is the starting point for the Lever list.
-- The last migration is `006_change_markers.sql`.
+- The last migration is `006_change_markers.sql`; `ai-usage` takes `007`, so this issue takes `008` (or `009` if `market-report` is implemented first).
 
 ## Part 1: Report input (metrics with IDs, no AI)
 
@@ -35,7 +35,7 @@ Four rules shape the design:
 
 ### Prompt and schema
 
-- New prompt `src/jobsearch/prompts/weekly_report.md` (English, with German output), model `MODEL_SCORING`, one `ai.ask()` call per report.
+- New prompt `src/jobsearch/prompts/weekly_report.md` (English, with German output), model `MODEL_SCORING`, one `ai.ask()` call per report with `purpose="weekly_report"` (see `ai-usage.md`).
 - The prompt carries the limits from "Reading the numbers" in `docs/issues/eval.md` (small numbers, selection bias, anchoring, different weeks), says that no Recommendation is a valid answer, and says that thin labels call for `label_more` rather than a verdict on precision. It states that the input is aggregates only, which is why it has no "Third-party text" section.
 - Levers are a list in code (`LEVERS` in `report.py`), and the JSON schema's enum is built from it, so adding a Lever is one line plus a test. Initial list: `search_term_off`, `search_term_new`, `exclusion`, `radius`, `remote_phrase`, `scoring_prompt`, `profile`, `career_url`, `label_more`.
 - Answer shape:
@@ -56,7 +56,7 @@ The `summary` follows the same number rule; a `summary` that breaks it is replac
 
 ### Storage and output
 
-- Migration `007_reports.sql`:
+- Migration `008_reports.sql`:
   - `reports`: id, created_at, period_start, period_end, model, prompt_hash, input_json, answer_json, counts_json, error.
   - `recommendations`: id, report_id, position, lever, target, action, evidence_json, confidence, kind (`change` / `new_lever`), decision (`open` / `accepted` / `rejected`), decided_at.
 - The Markdown report goes to `data/reports/YYYY-Www.md` (ISO week), written from the database like the Digest: summary, then each Recommendation with its evidence as a small table of label, value and `n`, then the Lever ideas, then "verworfen: n" with the reasons in the log.
@@ -106,7 +106,7 @@ In-memory database with synthetic data, no network, `ai.ask()` faked:
 - The Daily run makes the report when due, and a failing fake AI leaves the run and the Digest intact.
 - Dashboard: accept appends exactly one line to a temporary `private/` file, reject writes nothing, a request without token is refused, a held run lock is reported.
 - History: an accepted Recommendation older than 7 days brings before/after metrics into the next input.
-- Migration `007` on an existing database.
+- Migration `008` on an existing database.
 
 ## Done when
 
