@@ -14,7 +14,7 @@ import re
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from importlib import resources
 from pathlib import Path
 
@@ -46,6 +46,7 @@ class ReportInput:
     metrics: list[Metric] = field(default_factory=list)
     terms: dict[str, str] = field(default_factory=dict)  # slug in the IDs -> the Search term
     changes: list[Change] = field(default_factory=list)  # settings changes since the last report
+    history: list[dict] = field(default_factory=list)  # earlier Recommendations and what became of them
 
     def term_slug(self, term: str) -> str:
         """A stable slug per term; terms that slug alike get -2, -3, ..."""
@@ -67,7 +68,8 @@ class ReportInput:
 
     def to_prompt_json(self) -> str:
         return json.dumps({"metrics": [m.__dict__ for m in self.metrics],
-                           "changes": [{"day": c.day, "lines": c.lines} for c in self.changes]},
+                           "changes": [{"day": c.day, "lines": c.lines} for c in self.changes],
+                           "history": self.history},
                           ensure_ascii=False, separators=(",", ":"))
 
 
@@ -96,11 +98,11 @@ def _stages(inp: ReportInput, conn: sqlite3.Connection, key: str, name: str, per
 
 
 def _terms(inp: ReportInput, conn: sqlite3.Connection, key: str, name: str, period: Period,
-           active: set[str]) -> None:
+           active: set[str] | None) -> None:
     """Only active terms: a term that is no longer searched cannot be switched off, and its history
-    would only cost tokens."""
+    would only cost tokens. None takes every term, for the before/after of a switched-off one."""
     for t in term_metrics(conn, period):
-        if t.term.casefold() not in active:
+        if active is not None and t.term.casefold() not in active:
             continue
         prefix, label = f"term.{inp.term_slug(t.term)}", f"Suchbegriff '{t.term}'"
         inp.add(f"{prefix}.jobs.{key}", t.jobs, t.jobs, f"{label}: Jobs ({name})", keep_empty=True)
@@ -164,7 +166,55 @@ def report_input(conn: sqlite3.Connection, today: date, found_path: Path, last_r
         _terms(inp, conn, key, name, period, active)
         _scores(inp, conn, key, name, period)
         _funnel(inp, traces, key, name, period)
+    _history(inp, conn, today, traces)
     return inp
+
+
+HISTORY_REPORTS = 4  # earlier reports whose Recommendations go into the next input
+EFFECT_AFTER_DAYS = 7  # an accepted Recommendation gets before/after metrics once it is this old
+EFFECT_UNTIL_DAYS = 56  # and keeps them for about two months
+
+
+def _history(inp: ReportInput, conn: sqlite3.Connection, today: date, traces: list[Trace]) -> None:
+    """Earlier Recommendations with their decision, so rejected ones are not repeated. Accepted ones
+    old enough also get their evidence metrics before and after the decision, over two windows of the
+    same length, so the AI can judge whether the change worked."""
+    recent = [r[0] for r in conn.execute(
+        "SELECT id FROM reports WHERE answer_json IS NOT NULL ORDER BY id DESC LIMIT ?", (HISTORY_REPORTS,))]
+    rows = conn.execute(
+        f"""SELECT r.*, p.period_end FROM recommendations r JOIN reports p ON p.id = r.report_id
+            WHERE r.report_id IN ({",".join("?" * len(recent))})
+               OR (r.decision = 'accepted' AND r.kind = 'change' AND r.decided_at >= ?)
+            ORDER BY r.report_id, r.kind, r.position""",
+        [*recent, (today - timedelta(days=EFFECT_UNTIL_DAYS)).isoformat()]).fetchall()
+    for r in rows:
+        inp.history.append({"id": r["id"], "report": r["period_end"], "kind": r["kind"], "lever": r["lever"],
+                            "target": r["target"], "action": r["action"], "decision": r["decision"],
+                            "decided_at": (r["decided_at"] or "")[:10]})
+        if r["decision"] == "accepted" and r["kind"] == "change":
+            _effect(inp, conn, today, r, traces)
+
+
+def _effect(inp: ReportInput, conn: sqlite3.Connection, today: date, rec: sqlite3.Row,
+            traces: list[Trace]) -> None:
+    decided = date.fromisoformat(rec["decided_at"][:10])
+    days = (today - decided).days
+    if not EFFECT_AFTER_DAYS <= days <= EFFECT_UNTIL_DAYS:
+        return
+    families = {e.rsplit(".", 1)[0] for e in json.loads(rec["evidence_json"])}
+    windows = (("before", "vor der Änderung", Period("vorher", (decided - timedelta(days=days)).isoformat(),
+                                                     decided.isoformat())),
+               ("after", "nach der Änderung", Period("nachher", decided.isoformat(),
+                                                     (today + timedelta(days=1)).isoformat())))
+    for key, name, period in windows:
+        window = ReportInput(terms=dict(inp.terms))  # same slugs as the main input
+        _stages(window, conn, key, name, period)
+        _terms(window, conn, key, name, period, None)
+        _scores(window, conn, key, name, period)
+        _funnel(window, traces, key, name, period)
+        for m in window.metrics:
+            if m.id.rsplit(".", 1)[0] in families:
+                inp.add(f"rec.{rec['id']}.{m.id}", m.value, m.n, f"Empfehlung {rec['id']}: {m.label}", keep_empty=True)
 
 
 # --- The answer ----------------------------------------------------------------------------------
@@ -489,3 +539,43 @@ def write_report(conn: sqlite3.Connection, reports_dir: Path, report_id: int) ->
     path = reports_dir / f"{year}-W{week:02d}.md"
     path.write_text(render(report), encoding="utf-8")
     return path
+
+
+# --- Deciding on a Recommendation ----------------------------------------------------------------
+
+# The only Levers applied by the tool: one line appended to a private file. Everything else the
+# candidate changes by hand and only marks as done.
+APPLIED = {"search_term_off": ("search_terms_path", "-{}"), "search_term_new": ("search_terms_path", "{}"),
+           "exclusion": ("exclusions_path", "{}")}
+DECISIONS = ("accepted", "rejected")
+
+
+class DecisionError(Exception):
+    """The decision was not stored. The message is German, for the dashboard."""
+
+
+def _append_line(path: Path, line: str) -> None:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if text and not text.endswith("\n"):
+        text += "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{text}{line}\n", encoding="utf-8")
+
+
+def decide(conn: sqlite3.Connection, cfg: Config, rec_id: int, decision: str, now: datetime) -> None:
+    """Store the candidate's decision; accepting an applied Lever appends its line first. Final:
+    a decided Recommendation is not decided again, the file stays editable by hand."""
+    row = conn.execute("SELECT * FROM recommendations WHERE id = ?", (rec_id,)).fetchone()
+    if row is None or decision not in DECISIONS:
+        raise DecisionError("Diese Empfehlung gibt es nicht.")
+    if row["decision"] != "open":
+        raise DecisionError("Über diese Empfehlung ist schon entschieden.")
+    if decision == "accepted" and row["kind"] == "change" and row["lever"] in APPLIED:
+        target = row["target"].strip()
+        if not target or any(c in target for c in "\r\n") or target[0] in "#-":
+            raise DecisionError(f"'{target}' lässt sich nicht als Zeile eintragen. Bitte von Hand ändern.")
+        attribute, line = APPLIED[row["lever"]]
+        _append_line(getattr(cfg, attribute), line.format(target))
+    with conn:
+        conn.execute("UPDATE recommendations SET decision = ?, decided_at = ? WHERE id = ?",
+                     (decision, now.isoformat(timespec="seconds"), rec_id))

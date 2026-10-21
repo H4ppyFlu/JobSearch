@@ -302,3 +302,46 @@ def test_report_page_shows_the_newest_report_and_lists_the_earlier_ones(client, 
 
 def test_every_page_links_to_the_report(client):
     assert 'href="/bericht"' in page(client)
+
+
+def decide_on(client, rec_id, decision):
+    html = page(client, "/bericht")
+    token = re.search(r'name="token" value="([^"]+)"', html)[1]
+    return client.post(f"/empfehlung/{rec_id}", data={"decision": decision, "token": token})
+
+
+def rec_ids(conn):
+    return {r["lever"]: r["id"] for r in conn.execute("SELECT id, lever FROM recommendations")}
+
+
+def test_accepting_a_recommendation_on_the_page(client, conn, cfg):
+    week_data(conn, cfg)
+    make_report(conn, cfg, date(2026, 10, 21), ask=ReportAi(answer(rec(), rec(lever="radius", target=""))))
+    html = page(client, "/bericht")
+    assert "übernehmen" in html and "erledigt (von Hand)" in html
+    response = decide_on(client, rec_ids(conn)["search_term_off"], "accepted")
+    assert response.status_code == 303
+    assert cfg.search_terms_path.read_text(encoding="utf-8").splitlines()[-1] == "-Planer"
+    html = page(client, "/bericht")
+    assert "übernommen am" in html and "von Hand" in html  # the file stays editable by hand
+
+
+def test_deciding_needs_the_token(client, conn, cfg):
+    week_data(conn, cfg)
+    make_report(conn, cfg, date(2026, 10, 21), ask=ReportAi(answer(rec())))
+    assert client.post(f"/empfehlung/{rec_ids(conn)['search_term_off']}",
+                       data={"decision": "accepted", "token": "x"}).status_code == 400
+    assert "-Planer" not in cfg.search_terms_path.read_text(encoding="utf-8")
+
+
+def test_deciding_waits_while_a_run_holds_the_lock(client, conn, cfg):
+    from jobsearch.scheduler import RunLock
+
+    week_data(conn, cfg)
+    make_report(conn, cfg, date(2026, 10, 21), ask=ReportAi(answer(rec())))
+    rec_id = rec_ids(conn)["search_term_off"]
+    with RunLock(cfg.data_dir / "run.lock") as held:
+        assert held
+        response = decide_on(client, rec_id, "accepted")
+    assert response.status_code == 409 and "später" in response.get_data(as_text=True)
+    assert "-Planer" not in cfg.search_terms_path.read_text(encoding="utf-8")

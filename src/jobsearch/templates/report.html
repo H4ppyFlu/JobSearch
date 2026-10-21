@@ -7,8 +7,25 @@
   {% endfor %}
 </table>
 {% endmacro %}
+{% macro decision(r, accept, reject, note="") %}
+<div style="margin-top:8px">
+{% if r.decision == "open" %}
+  <form method="post" action="{{ url_for('decide', rec_id=r.id) }}" style="display:inline">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button class="primary" name="decision" value="accepted">{{ accept }}</button>
+    <button name="decision" value="rejected">{{ reject }}</button>
+  </form>
+  {% if note %}<span class="muted">{{ note }}</span>{% endif %}
+{% else %}
+  {% set done = "übernommen" if r.decision == "accepted" else "abgelehnt" %}
+  <span class="badge {{ 'target' if r.decision == 'accepted' }}">{{ done }} am {{ r.decided_at[:10] }}</span>
+  {% if r.decision == "accepted" and note %}<span class="muted">{{ note }}</span>{% endif %}
+{% endif %}
+</div>
+{% endmacro %}
 {% block title %}Wochenbericht – JobSearch{% endblock %}
 {% block content %}
+{% if notice %}<div class="card" style="border-color:var(--warn)"><strong>{{ notice }}</strong></div>{% endif %}
 {% if not report %}
 <div class="card"><p>Noch kein Wochenbericht. Der Daily run erstellt ihn, sobald er fällig ist, oder von Hand mit
   <code>jobsearch report</code>.</p></div>
@@ -37,6 +54,12 @@
     <span class="badge">Sicherheit: {{ r.confidence }}</span></h3>
   <p>{{ r.action }}</p>
   {{ evidence(r.evidence) }}
+  {% if r.lever in APPLIED %}
+    {{ decision(r, "übernehmen", "ablehnen",
+                "Steht dann als eigene Zeile in private/" ~ files[r.lever] ~ "; ändern oder rückgängig nur von Hand in der Datei.") }}
+  {% else %}
+    {{ decision(r, "erledigt (von Hand)", "ablehnen") }}
+  {% endif %}
 </div>
 {% endfor %}
 
@@ -48,6 +71,7 @@
   <h3 style="margin:0;font-size:16px">{{ r.lever }}</h3>
   <p>{{ r.action }} {{ r.why }}</p>
   {{ evidence(r.evidence) }}
+  {{ decision(r, "aufnehmen", "verwerfen", "Aufnehmen merkt die Idee nur vor; eine neue Stellschraube ist eine Änderung im Code.") }}
 </div>
 {% endfor %}
 {% endif %}

@@ -16,6 +16,11 @@ Groups:
 - `term.<term>.*`: per active Search term, the Jobs it found, those no other term found (`only_here`), eligible ones, tiers and positive labels. The labels name the real term.
 - `score.*`: tiers against labels, the precision of tier 3, positive Jobs the AI put in tier 1 (`missed_in_tier1`, the costliest misses), and how many scored Jobs have a label.
 - `funnel.*`: openings the candidate found outside the tool, by the stage where the pipeline lost them.
+- `rec.<id>.*.before` / `.after`: for a Recommendation the candidate accepted at least a week ago, its evidence metrics over two windows of the same length, before and after the decision.
+
+# History
+
+`history` lists the Recommendations of the last reviews and what the candidate decided: `accepted` (applied, or done by hand), `rejected`, or still `open`. Do not recommend a rejected change again unless the metrics have clearly changed since. For an accepted one with `rec.<id>` metrics, say in the `summary` whether it worked, citing those metrics. An `open` one the candidate has not decided yet need not be repeated.
 
 # Reading the numbers
 

@@ -366,3 +366,95 @@ def test_failed_or_interrupted_reports_do_not_count(conn):
     add_report(conn, "2026-10-20", answered=False, error="Claude-Kontingent erschöpft")
     add_report(conn, "2026-10-21", answered=False)
     assert report_due(conn, TODAY, 7)
+
+
+# --- Deciding on a Recommendation ----------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+from jobsearch.report import DecisionError, decide  # noqa: E402
+
+NOW = __import__("datetime").datetime(2026, 10, 22, 9, 30)
+
+
+def stored_report(conn, cfg, *recs, new_levers=()):
+    week_data(conn, cfg)
+    make_report(conn, cfg, TODAY, ask=ReportAi(answer(*recs, new_levers=new_levers)))
+    return {(r.kind, r.lever): r.id for r in latest_report(conn).recommendations}
+
+
+def test_accepting_appends_one_line_and_stores_the_decision(conn, cfg):
+    cfg.private_dir.mkdir(parents=True, exist_ok=True)
+    ids = stored_report(conn, cfg, rec(), rec(lever="exclusion", target="Werkstudent"))
+    cfg.exclusions_path.write_text("Praktikum", encoding="utf-8")  # no newline at the end
+    decide(conn, cfg, ids[("change", "search_term_off")], "accepted", NOW)
+    decide(conn, cfg, ids[("change", "exclusion")], "accepted", NOW)
+    assert cfg.search_terms_path.read_text(encoding="utf-8") == "Planer\n-Planer\n"
+    assert cfg.exclusions_path.read_text(encoding="utf-8") == "Praktikum\nWerkstudent\n"
+    r = [r for r in latest_report(conn).recommendations if r.lever == "exclusion"][0]
+    assert (r.decision, r.decided_at) == ("accepted", "2026-10-22T09:30:00")
+
+
+def test_rejecting_and_manual_levers_write_no_file(conn, cfg):
+    ids = stored_report(conn, cfg, rec(), rec(lever="radius", target=""),
+                        new_levers=[{"name": "Gehalt", "what": "Filtern.", "why": "Schwach.",
+                                     "evidence": ["stage.tier1.7d"]}])
+    before = cfg.search_terms_path.read_text(encoding="utf-8")
+    decide(conn, cfg, ids[("change", "search_term_off")], "rejected", NOW)
+    decide(conn, cfg, ids[("change", "radius")], "accepted", NOW)
+    decide(conn, cfg, ids[("new_lever", "Gehalt")], "accepted", NOW)
+    assert cfg.search_terms_path.read_text(encoding="utf-8") == before
+    assert {r.lever: r.decision for r in latest_report(conn).recommendations} == {
+        "search_term_off": "rejected", "radius": "accepted", "Gehalt": "accepted"}
+
+
+def test_a_decision_is_final(conn, cfg):
+    ids = stored_report(conn, cfg, rec())
+    decide(conn, cfg, ids[("change", "search_term_off")], "rejected", NOW)
+    with pytest.raises(DecisionError, match="schon entschieden"):
+        decide(conn, cfg, ids[("change", "search_term_off")], "accepted", NOW)
+    with pytest.raises(DecisionError):
+        decide(conn, cfg, 999, "accepted", NOW)
+
+
+def test_a_target_that_would_break_the_file_is_not_written(conn, cfg):
+    ids = stored_report(conn, cfg, rec(lever="exclusion", target="Werk\nstudent"))
+    with pytest.raises(DecisionError):
+        decide(conn, cfg, ids[("change", "exclusion")], "accepted", NOW)
+    assert "Werk" not in cfg.exclusions_path.read_text(encoding="utf-8")
+    assert latest_report(conn).recommendations[0].decision == "open"
+
+
+# --- History in the next input -------------------------------------------------------------------
+
+def test_the_next_input_carries_earlier_decisions(conn, cfg):
+    ids = stored_report(conn, cfg, rec(), rec(lever="radius", target=""))
+    decide(conn, cfg, ids[("change", "search_term_off")], "rejected", NOW)
+    inp = report_input(conn, date(2026, 10, 28), cfg.found_elsewhere_path, None, ["Planer"])
+    history = json.loads(inp.to_prompt_json())["history"]
+    assert {(h["lever"], h["decision"]) for h in history} == {("search_term_off", "rejected"), ("radius", "open")}
+    assert history[0]["report"] == "2026-10-21" and history[0]["action"]
+
+
+def test_an_accepted_recommendation_gets_before_and_after_metrics_once_a_week_old(conn, cfg):
+    ids = stored_report(conn, cfg, rec(evidence=("term.planer.tier1.all", "term.planer.jobs.all")))
+    rec_id = ids[("change", "search_term_off")]
+    decide(conn, cfg, rec_id, "accepted", __import__("datetime").datetime(2026, 10, 21, 18, 0))
+    later = add_job(conn, "Planer spät", first_seen="2026-10-25")
+    found_by(conn, later, "Planer")
+    score(conn, later, 2)
+    young = by_id(report_input(conn, date(2026, 10, 25), cfg.found_elsewhere_path, None, []))
+    assert not [k for k in young if k.startswith("rec.")]
+    m = by_id(report_input(conn, date(2026, 11, 2), cfg.found_elsewhere_path, None, []))  # the term is off now
+    assert (m[f"rec.{rec_id}.term.planer.tier1.before"].value, m[f"rec.{rec_id}.term.planer.tier1.after"].value) == (6, 0)
+    assert (m[f"rec.{rec_id}.term.planer.jobs.before"].value, m[f"rec.{rec_id}.term.planer.jobs.after"].value) == (6, 1)
+    assert "nach" in m[f"rec.{rec_id}.term.planer.jobs.after"].label
+
+
+def test_history_reaches_back_four_reports(conn, cfg):
+    week_data(conn, cfg)
+    for day in (1, 8, 15, 22, 29):
+        make_report(conn, cfg, date(2026, 9, day), ask=ReportAi(answer(rec())))
+    reports = {h["report"] for h in json.loads(report_input(conn, TODAY, cfg.found_elsewhere_path, None,
+                                                            ["Planer"]).to_prompt_json())["history"]}
+    assert reports == {"2026-09-08", "2026-09-15", "2026-09-22", "2026-09-29"}

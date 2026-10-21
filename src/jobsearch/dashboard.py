@@ -200,9 +200,13 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
         return render_template("job.html", job=job, postings=postings, description=description, score=score,
                                chain=reopening_chain(conn(), job_id), notes=notes, token=token, terms=terms)
 
+    def check_token() -> None:
+        if not hmac.compare_digest(request.form.get("token", "").encode(), token.encode()):
+            abort(400)
+
     @app.get("/bericht")
     @app.get("/bericht/<int:report_id>")
-    def report_page(report_id: int | None = None):
+    def report_page(report_id: int | None = None, notice: str | None = None, code: int = 200):
         from . import report
 
         finished = conn().execute(
@@ -215,8 +219,28 @@ def create_app(cfg: Config, now: Callable[[], datetime] = datetime.now) -> Flask
         shown = report.load_report(conn(), report_id) if report_id else None
         weeks = {r["id"]: date.fromisoformat(r["period_end"]).isocalendar() for r in finished}
         created = {r["id"]: r["created_at"][:16].replace("T", " ") for r in finished}
-        return render_template("report.html", report=shown, weeks=weeks, created=created,
-                               LEVER_LABELS=report.LEVER_LABELS)
+        files = {lever: getattr(cfg, attr).name for lever, (attr, _) in report.APPLIED.items()}
+        return render_template("report.html", report=shown, weeks=weeks, created=created, token=token,
+                               notice=notice, LEVER_LABELS=report.LEVER_LABELS, APPLIED=report.APPLIED,
+                               files=files), code
+
+    @app.post("/empfehlung/<int:rec_id>")
+    def decide(rec_id: int):
+        from . import report, scheduler
+
+        check_token()
+        row = conn().execute("SELECT report_id FROM recommendations WHERE id = ?", (rec_id,)).fetchone()
+        if row is None:
+            abort(404)
+        # The same lock as the runs: a run reads these files, so they are not written under it.
+        with scheduler.RunLock(cfg.data_dir / "run.lock") as held:
+            if not held:
+                return report_page(row["report_id"], "Gerade läuft ein Lauf. Bitte später noch einmal versuchen.", 409)
+            try:
+                report.decide(conn(), cfg, rec_id, request.form.get("decision", ""), now())
+            except report.DecisionError as e:
+                return report_page(row["report_id"], str(e), 409)
+        return redirect(url_for("report_page", report_id=row["report_id"]), code=303)
 
     @app.post("/job/<int:job_id>/status")
     def set_status(job_id: int):

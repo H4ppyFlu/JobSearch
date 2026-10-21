@@ -1,6 +1,6 @@
 # Issue: Weekly report with recommendations
 
-Status: Parts 1 to 3 done (2026-10-21). Implement on branch `implement-weekly-report`.
+Status: Parts 1 to 4 built (2026-10-21); the live "Done when" waits for the candidate's first decision. Implement on branch `implement-weekly-report`.
 
 ## Goal
 
@@ -79,14 +79,14 @@ The `summary` follows the same number rule, with its own `summary_evidence`; a `
   - `search_term_new`: `<term>` in `private/search_terms.txt`;
   - `exclusion`: `<word>` in `private/exclusions.txt`.
 - The write takes `scheduler.RunLock`; while a run holds it, the page says to try again later. The decision and its date are stored on the row. There is no undo in the dashboard: the page says the file can be edited by hand.
-- All other Levers show "übernehmen" as "erledigt (von Hand)": the candidate makes the change themselves (radius in `.env`, remote phrases in `eligibility.py`, the prompt, a career URL) and marks it. The Profile is never written; for `profile` the page only shows the suggestion.
+- All other Levers show "übernehmen" as "erledigt (von Hand)": the candidate makes the change themselves (radius in `.env`, remote phrases in `eligibility.py`, the prompt, a career URL, the Profile, labelling more Jobs) and marks it. The Profile is never written. Decisions are final: a decided Recommendation shows its decision instead of the buttons.
 - The next Daily run picks the change up in its settings snapshot, so it shows in `eval --changes` as a split point.
 - "aufnehmen" on a Lever idea only marks it. Turning it into a real Lever is a code change done by hand later.
 
 ### History in the next input
 
-- `report_input()` adds the Recommendations and Lever ideas of earlier reports with their decision and date, so the AI does not repeat rejected ones.
-- For each accepted Recommendation decided at least 7 days ago, it adds before/after metrics around the decision date (same logic as `--split`), with their own IDs (for example `rec.<id>.term.<term>.jobs.before`). The AI can then judge whether the change worked, and the number rule still holds.
+- `report_input()` adds the Recommendations and Lever ideas of the last four reports with their decision and date, so the AI does not repeat rejected ones.
+- For each accepted Recommendation decided 7 to 56 days ago, it adds the metric families of its evidence over two windows of the same length before and after the decision day, with their own IDs (for example `rec.<id>.term.<term>.jobs.before`). (Changed during implementation: equal windows instead of `--split`'s whole history against the time since, which would compare weeks with days.) The AI can then judge whether the change worked, and the number rule still holds.
 
 ## Language
 
