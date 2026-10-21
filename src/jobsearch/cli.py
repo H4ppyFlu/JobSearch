@@ -1,4 +1,4 @@
-"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task | dashboard | eval."""
+"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task | dashboard | eval | check-injection."""
 
 from __future__ import annotations
 
@@ -281,6 +281,27 @@ def cmd_career_setup(cfg: Config, recheck: bool) -> int:
     return 0
 
 
+def cmd_check_injection(cfg: Config) -> int:
+    """Two AI calls with synthetic injected ads and a career page; prints pass or fail per expectation."""
+    from . import injection
+
+    print("Injection-Check: 2 Aufrufe an Claude (Bewertung und Extraktion), nichts wird gespeichert.")
+    try:
+        report = injection.run(cfg, cfg.root / "tests" / "fixtures" / "injection")
+    except ai.AiError as e:
+        print(f"Injection-Check abgebrochen: {e}", file=sys.stderr)
+        return 1
+    print("Modelle: " + ", ".join(report.models))
+    for line in report.info:
+        print(f"  {line}")
+    for check in report.checks:
+        detail = f" ({check.detail})" if check.detail else ""
+        print(f"{'OK    ' if check.ok else 'FEHLER'} {check.name}{detail}")
+    passed = sum(c.ok for c in report.checks)
+    print(f"{passed} von {len(report.checks)} Erwartungen erfüllt.")
+    return 0 if report.ok else 1
+
+
 def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date | None = None,
              split: date | None = None, scores: bool = False, by: str | None = None, funnel: bool = False) -> int:
     conn = db.connect(cfg.db_path)
@@ -345,6 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     dashboard = sub.add_parser("dashboard", help="Dashboard im Browser öffnen")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
+    sub.add_parser("check-injection", help="Prompts gegen eingeschleuste Anweisungen prüfen (2 KI-Aufrufe)")
     evaluate = sub.add_parser("eval", help="Auswertung der gespeicherten Läufe (ohne KI)")
     evaluate.add_argument("--changes", action="store_true", help="Wann sich die Einstellungen geändert haben")
     evaluate.add_argument("--since", type=date.fromisoformat, help="Erster Tag (JJJJ-MM-TT)")
@@ -387,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_dashboard(cfg, args.port, not args.no_browser)
         elif args.command == "eval":
             return cmd_eval(cfg, args.changes, args.since, args.until, args.split, args.scores, args.by, args.funnel)
+        elif args.command == "check-injection":
+            return cmd_check_injection(cfg)
     except ConfigError as e:
         print(f"Konfiguration: {e}", file=sys.stderr)
         if args.command == "run":

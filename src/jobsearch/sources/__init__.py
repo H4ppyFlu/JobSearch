@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass, field
 
 
@@ -29,3 +30,16 @@ class Posting:
     @property
     def location_raw(self) -> str:
         return "; ".join(loc.label for loc in self.locations if loc.label)
+
+
+def is_local_host(host: str) -> bool:
+    """True for localhost and for IP literals in loopback, private, link-local or unspecified ranges.
+    Host names are not resolved, so a public name pointing at a local address is not caught."""
+    host = host.strip().strip("[]").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified

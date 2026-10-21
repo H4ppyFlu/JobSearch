@@ -1,6 +1,6 @@
 # Issue: Defenses against prompt injection from third-party text
 
-Status: open. To start, create the branch `implement-prompt-injection` from `main`; then one commit per part, each after the user's go.
+Status: in progress on branch `implement-prompt-injection`. Part 1 done (baseline recorded).
 
 ## Goal
 

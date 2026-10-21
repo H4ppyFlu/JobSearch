@@ -110,6 +110,7 @@ A term you accept in the repo, for example a common technical word that is also 
 .venv\Scripts\python -m jobsearch eval --scores [--by model|profile|prompt|month]  # Fit score against Job status
 .venv\Scripts\python -m jobsearch eval --funnel  # where openings found elsewhere got lost
 .venv\Scripts\python -m jobsearch eval --changes  # when settings changed (prompt, Profile, Search terms, ...)
+.venv\Scripts\python -m jobsearch check-injection  # prompts against injected instructions (2 AI calls)
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again
 .venv\Scripts\python -m pytest             # tests, never touch the network
