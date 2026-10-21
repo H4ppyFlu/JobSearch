@@ -1,6 +1,6 @@
 # Issue: Market report (skill groups and active companies)
 
-Status: open. Implement on branch `implement-market-report`.
+Status: in progress on branch `implement-market-report`. Part 1 done.
 
 ## Goal
 

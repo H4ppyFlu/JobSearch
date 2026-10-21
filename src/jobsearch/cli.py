@@ -1,4 +1,4 @@
-"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task | dashboard | eval | check-injection."""
+"""Command line entry point: jobsearch init | status | daily | score | run | install-task | uninstall-task | dashboard | eval | check-injection | market."""
 
 from __future__ import annotations
 
@@ -379,6 +379,15 @@ def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date 
     return 0
 
 
+def cmd_market(cfg: Config, today: date | None = None) -> int:
+    """The Market report: active companies."""
+    from . import market
+
+    conn = db.connect(cfg.db_path)
+    print("\n".join(market.company_report(market.active_companies(conn, today or date.today()))))
+    return 0
+
+
 def cmd_dashboard(cfg: Config, port: int, open_browser: bool) -> int:
     import socket
     import threading
@@ -420,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
     dashboard = sub.add_parser("dashboard", help="Dashboard im Browser öffnen")
     dashboard.add_argument("--port", type=int, default=8765)
     dashboard.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
+    sub.add_parser("market", help="Marktbericht: aktive Firmen")
     sub.add_parser("check-injection", help="Prompts gegen eingeschleuste Anweisungen prüfen (2 KI-Aufrufe)")
     report = sub.add_parser("report", help="Wochenbericht mit Empfehlungen jetzt erstellen (1 KI-Aufruf)")
     report.add_argument("--dry-run", action="store_true", help="Nur die Eingabe für die KI zeigen, ohne Aufruf")
@@ -473,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "eval":
             return cmd_eval(cfg, args.changes, args.since, args.until, args.split, args.scores, args.by, args.funnel,
                             args.usage)
+        elif args.command == "market":
+            return cmd_market(cfg)
         elif args.command == "check-injection":
             return cmd_check_injection(cfg)
     except ConfigError as e:
