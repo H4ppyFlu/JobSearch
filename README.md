@@ -48,7 +48,8 @@ flowchart LR
 
 | Step | Model | Input | Output | Phase |
 |---|---|---|---|---|
-| Fit score for new eligible Jobs (**built**) | Sonnet | Profile, recent Feedback notes, rubric, up to `MAX_SCORED_PER_RUN` Jobs in one call | JSON per Job: tier (★★★/★★/★), German reasoning, matching and missing skills, remote and part-time signals | 3 |
+| Fit score for new eligible Jobs (**built**) | Sonnet | Profile, recent Feedback notes, rubric, up to `MAX_SCORED_PER_RUN` Jobs in one call | JSON per Job: tier (★★★/★★/★), German reasoning, matching and missing skills, remote and part-time signals, and for ★ whether it is Sorted out (clearly another field) | 3 |
+| Rescoring (by hand only, **built**) | Sonnet | ★ Jobs with status new whose Fit score came from an older scoring prompt, in batches of `MAX_SCORED_PER_RUN` | A new Fit score per Job; the old one is kept | – |
 | Same Job across Sources? (**built**) | Sonnet | Candidate pairs found by plain rules | Same Job or not, in the same call as scoring | 4 |
 | Generic job flag (**built**) | Sonnet | The Job being scored | Flag that keeps multi-role and recruiter ads out of matching | 4 |
 | Extract Postings from career pages (**built**) | Haiku | Visible text of pages whose hash changed, several pages per call | Posting JSON | 8 |
@@ -104,6 +105,7 @@ A term you accept in the repo, for example a common technical word that is also 
 ```
 .venv\Scripts\python -m jobsearch daily    # collect, check Eligibility, fetch descriptions, score, Digest
 .venv\Scripts\python -m jobsearch score    # score only (--limit N for a cheap test)
+.venv\Scripts\python -m jobsearch rescore  # rate ★ Jobs from an older scoring prompt again (1 AI call per batch)
 .venv\Scripts\python -m jobsearch status   # counts and the last runs
 .venv\Scripts\python -m jobsearch dashboard # local web page: Jobs, details, Job status and notes
 .venv\Scripts\python -m jobsearch career-setup [--recheck]  # find career pages with web search (one time)
@@ -126,6 +128,8 @@ The Weekly report is made by the Daily run once a week (`REPORT_INTERVAL_DAYS`),
 The Market report looks across all scored Jobs. Active companies (3 or more Jobs in reach within 90 days, or a Reopening, without Generic jobs) come from plain Python, with a hint for those not yet on the Target company list. The skill texts of the ★★ and ★★★ Fit scores are free text, so `jobsearch market` first sorts new ones into lasting Skill groups with a few Haiku calls (checked by index in code), then counts per group how many Jobs miss it or show it. It runs only by hand and writes no file; the dashboard page "Markt" shows the same without AI and lists each group's original texts, so a wrong grouping is easy to spot (`--regroup` starts over).
 
 The dashboard runs on `127.0.0.1` only and opens in the browser. It lists the Jobs with filters, marks those that are new since the last visit, and shows the full description, all Postings and the score reasoning per Job. Setting a Job status there can carry a Feedback note, and recent notes go into the next scoring prompt.
+
+A ★ Job the scoring model marks as clearly outside the candidate's field is Sorted out: it keeps its Fit score and reasoning, but the dashboard list hides it while its Job status is new (the filter "aussortiert" shows them), the Market report leaves it out, and the Digest only counts it. Nothing is deleted. After a change to the scoring prompt, `jobsearch rescore` rates the open ★ Jobs again in one go; it adds a newer Fit score, never touches Eligibility or matching, and stops at a failing batch so the next call continues. Reports count each Job once, by its newest Fit score; `eval --scores --by prompt` puts the old and the new judgment side by side.
 
 The career scan reads `private/companies.csv`. `career-setup` fills in missing career page URLs with a web search and writes them back for you to check; `--recheck` looks again at pages that failed or listed nothing. Pages that only show jobs after JavaScript need the optional browser: `pip install -e ".[browser]"` and `playwright install chromium`.
 

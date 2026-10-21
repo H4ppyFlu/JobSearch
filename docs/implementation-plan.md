@@ -89,7 +89,8 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
   - No `runs` row: `runs.kind` has a `CHECK` with three values, and a rebuild was not worth it. The calls are in `ai_calls` without a run id, like `check-injection`.
   - Live: one call worked through all ★ Jobs with status new in a few batches, each on the first attempt, at an API equivalent under two dollars. About two thirds of them were sorted out, a handful moved up to ★★, none to ★★★. A second call made no AI call. `eval` shows "davon aussortiert" at about three fifths of ★, and `status` and `eval` still count each Job once. A read-only `collect_day()` for today held no Job with a Fit score from before today.
 - **Sorted out review** (2026-10-21). From the two-axis review of the branch: the newest Fit score per Job is defined once, `db.NEWEST_SCORE_ID` (`max(id)`); the dashboard, the Digest, the evaluation, `status`, rescoring and the Market report (which had ordered by `scored_at`) build their joins from it. The tier filter takes its tier values from `dashboard.TIERS`; `cmd_rescore` looks up `ai.ask` per call. `CONTEXT.md` has Sorted out and Rescoring.
-- **Open for the user (Sorted out):** review a sample of the Jobs in the dashboard filter "aussortiert" and the Jobs that moved up; after the next Daily run the Digest should show the "aussortiert" line and no rescored Job.
+- **Sorted out done** (2026-10-21). The candidate reviewed a sample of the Sorted out Jobs in the dashboard filter and the Jobs that moved up, and found the judgment sound.
+- **Open for the user (Sorted out):** after the next Daily run the Digest should show the "aussortiert" line and no rescored Job. That is the issue's last "Done when" check, still open at the merge.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)

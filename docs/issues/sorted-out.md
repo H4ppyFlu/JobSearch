@@ -1,6 +1,6 @@
 # Issue: Sorted out Jobs (AI marks clear mismatches during scoring)
 
-Status: Parts 1 to 4 done; the candidate's review of the judgment and the next Daily run are open. Implement on branch `implement-sorted-out`.
+Status: done (2026-10-21). Only the Digest check after the next Daily run is open. Implement on branch `implement-sorted-out`.
 
 ## Goal
 
