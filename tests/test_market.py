@@ -6,7 +6,8 @@ import pytest
 
 from jobsearch import ai, db, market
 from jobsearch.cli import cmd_market
-from jobsearch.market import active_companies, group_skills
+from jobsearch.evaluation import Period
+from jobsearch.market import active_companies, group_skills, skill_table, ungrouped_texts
 
 from .conftest import add_job, record_usage
 
@@ -260,3 +261,69 @@ def test_the_migration_adds_skill_groups_to_an_existing_database(tmp_path):
 
     assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
     assert groups(conn) == {}
+
+
+def group_as(conn, mapping):
+    with conn:
+        conn.executemany("INSERT INTO skill_groups (text, group_name) VALUES (?, ?)", mapping.items())
+
+
+def test_skill_table_counts_each_group_once_per_job_and_side(conn):
+    recent = add_job(conn, "A", first_seen="2026-10-01")
+    add_score(conn, recent, 3, missing=["SAP PM", "SAP MM", "Excel"], matching=["Excel"])
+    old = add_job(conn, "B", first_seen="2026-05-01")
+    add_score(conn, old, 2, missing=["SAP PM"], matching=["Python"], low_confidence=True)
+    conn.execute("UPDATE jobs SET status = 'applied' WHERE id = ?", (old,))
+    rescored = add_job(conn, "C", first_seen="2026-10-01")
+    add_score(conn, rescored, 2, scored_at="2026-10-01T08:00:00", missing=["SAP PM"])
+    add_score(conn, rescored, 1, scored_at="2026-10-03T08:00:00", missing=["SAP PM"])  # newest is ★: left out
+    group_as(conn, {"SAP PM": "SAP", "SAP MM": "SAP", "Excel": "Excel", "Python": "Python"})
+
+    rows = {r.group: r for r in skill_table(conn, Period("gesamt"), TODAY)}
+
+    sap, excel = rows["SAP"], rows["Excel"]
+    assert (sap.missing_recent, sap.missing_total, sap.matching_recent, sap.matching_total) == (1, 2, 0, 0)
+    assert (sap.positive, sap.low_confidence) == (1, 1)
+    assert (excel.missing_total, excel.matching_total, excel.positive) == (1, 1, 0)
+    assert list(rows) == ["SAP", "Excel", "Python"]  # by "fehlt, total"
+
+
+def test_skill_table_honours_the_period_and_leaves_ungrouped_texts_out(conn):
+    early = add_job(conn, "A", first_seen="2026-09-01")
+    add_score(conn, early, 2, missing=["SAP PM"])
+    late = add_job(conn, "B", first_seen="2026-10-10")
+    add_score(conn, late, 2, missing=["SAP PM", "Neu"])
+    group_as(conn, {"SAP PM": "SAP"})
+
+    [sap] = skill_table(conn, Period("x", since="2026-10-01", until="2026-10-11"), TODAY)
+
+    assert (sap.group, sap.missing_total, sap.missing_recent) == ("SAP", 1, 1)
+    assert ungrouped_texts(conn) == ["Neu"]
+
+
+def test_market_command_shows_the_top_groups_and_the_ungrouped_count(cfg, capsys, monkeypatch):
+    monkeypatch.setattr(market, "TOP_GROUPS", 2)
+    conn = db.connect(cfg.db_path)
+    skills_job(conn, ["SAP", "Excel", "Python"])
+    skills_job(conn, ["SAP", "Excel"])
+    skills_job(conn, ["SAP", "Später"])
+    group_as(conn, {"SAP": "SAP", "Excel": "Excel", "Python": "Python"})
+
+    assert cmd_market(cfg, today=TODAY, ask=SkillAi(fail="Claude-Kontingent erschöpft")) == 1
+
+    out = capsys.readouterr().out
+    assert "Skill-Gruppen (★★ und ★★★, gesamt" in out
+    assert [line.split()[0] for line in out.splitlines() if line.startswith("  SAP") or line.startswith("  Excel")
+            or line.startswith("  Python")] == ["SAP", "Excel"]
+    assert "ohne Gruppe: 1" in out
+
+
+def test_market_command_limits_the_table_to_the_period(cfg, capsys):
+    conn = db.connect(cfg.db_path)
+    skills_job(conn, ["SAP"])
+    group_as(conn, {"SAP": "SAP"})
+
+    cmd_market(cfg, today=TODAY, since=date(2026, 10, 2), ask=SkillAi())
+
+    out = capsys.readouterr().out
+    assert "ab 2026-10-02" in out and "Keine Skill-Gruppen im Zeitraum" in out

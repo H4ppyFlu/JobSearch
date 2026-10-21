@@ -20,6 +20,8 @@ from importlib import resources
 
 from . import ai, db
 from .companies import normalize_company
+from .evaluation import Period, label
+from .evaluation import _table as evaluation_table
 
 log = logging.getLogger(__name__)
 
@@ -213,3 +215,72 @@ def grouping_summary(result: GroupingResult) -> str:
     if result.left:
         line += f", {result.left} warten auf den nächsten Lauf"
     return line
+
+
+# --- Skill table ---------------------------------------------------------------------------------
+
+TOP_GROUPS = 20
+
+
+@dataclass
+class SkillRow:
+    """One Skill group over the ★★/★★★ Jobs first seen in the period. Each Job counts once per side;
+    a group can be on both sides, since different ads were judged differently."""
+    group: str
+    missing_recent: int = 0  # Jobs of the last WINDOW_DAYS days within the period
+    missing_total: int = 0
+    matching_recent: int = 0
+    matching_total: int = 0
+    positive: int = 0  # Jobs naming the group on either side whose label is positive
+    low_confidence: int = 0  # the same, with a Low-confidence score
+
+
+def skill_table(conn: sqlite3.Connection, period: Period, today: date) -> list[SkillRow]:
+    """Skill groups by how many Jobs miss them, most first. Ungrouped texts are left out (see ungrouped_texts)."""
+    group_of = dict(conn.execute("SELECT text, group_name FROM skill_groups").fetchall())
+    cond, params = period.where("j.first_seen")
+    start = window_start(today)
+    rows = conn.execute(
+        f"""SELECT j.first_seen, j.status, s.low_confidence, s.missing_skills, s.matching_skills
+            FROM jobs j {NEWEST_SCORE} WHERE s.tier IN {GOOD_TIERS} AND {cond}""", params)
+    table: dict[str, SkillRow] = {}
+    for r in rows:
+        recent = r["first_seen"] >= start
+        named = set()
+        for side in ("missing", "matching"):
+            for name in {group_of[t] for t in skill_items(r, f"{side}_skills") if t in group_of}:
+                row = table.setdefault(name, SkillRow(name))
+                setattr(row, f"{side}_total", getattr(row, f"{side}_total") + 1)
+                setattr(row, f"{side}_recent", getattr(row, f"{side}_recent") + recent)
+                named.add(name)
+        for name in named:
+            table[name].positive += label(r["status"]) == "positive"
+            table[name].low_confidence += bool(r["low_confidence"])
+    return sorted(table.values(), key=lambda row: (-row.missing_total, -row.matching_total, row.group.casefold()))
+
+
+def period_for(since: date | None, until: date | None) -> Period:
+    """The chosen period with a German label; `until` is the last day."""
+    if since and until:
+        name = f"{since} bis {until}"
+    else:
+        name = f"ab {since}" if since else f"bis {until}" if until else "gesamt"
+    return Period(name, since and since.isoformat(), until and (until + timedelta(days=1)).isoformat())
+
+
+def skill_report(rows: list[SkillRow], ungrouped: int, period: Period) -> list[str]:
+    title = (f"Skill-Gruppen (★★ und ★★★, {period.label}; je Job zählt eine Gruppe einmal pro Seite, "
+             f"\"90 T\" = letzte {WINDOW_DAYS} Tage):")
+    lines = [title]
+    if rows:
+        lines += evaluation_table(
+            ["fehlt 90 T", "fehlt", "vorhanden 90 T", "vorhanden", "davon positiv", "davon geringe Sicherheit"],
+            [(f"  {r.group}", [str(v) for v in (r.missing_recent, r.missing_total, r.matching_recent,
+                                                r.matching_total, r.positive, r.low_confidence)])
+             for r in rows[:TOP_GROUPS]])
+        if len(rows) > TOP_GROUPS:
+            lines.append(f"  … und {len(rows) - TOP_GROUPS} weitere Gruppen (alle im Dashboard unter \"Markt\")")
+    else:
+        lines.append("  Keine Skill-Gruppen im Zeitraum.")
+    lines.append(f"  ohne Gruppe: {ungrouped}")
+    return lines

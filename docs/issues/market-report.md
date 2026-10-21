@@ -1,6 +1,6 @@
 # Issue: Market report (skill groups and active companies)
 
-Status: in progress on branch `implement-market-report`. Parts 1 and 2 done.
+Status: in progress on branch `implement-market-report`. Parts 1 to 3 done.
 
 ## Goal
 

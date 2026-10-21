@@ -379,16 +379,21 @@ def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date 
     return 0
 
 
-def cmd_market(cfg: Config, regroup: bool = False, today: date | None = None, ask=None) -> int:
+def cmd_market(cfg: Config, regroup: bool = False, since: date | None = None, until: date | None = None,
+               today: date | None = None, ask=None) -> int:
     """The Market report. Groups new skill texts first (a few AI calls); if that fails, the report
     is printed anyway with what is grouped so far. Returns 1 if the AI step failed."""
     from . import market
 
     conn = db.connect(cfg.db_path)
     result = market.group_skills(conn, model=cfg.model_extraction, ask=ask or recording_ask(conn), regroup=regroup)
-    print("\n".join(market.company_report(market.active_companies(conn, today or date.today()))))
+    today = today or date.today()
+    print("\n".join(market.company_report(market.active_companies(conn, today))))
     print()
     print(market.grouping_summary(result))
+    period = market.period_for(since, until)
+    print("\n".join(market.skill_report(market.skill_table(conn, period, today), len(market.ungrouped_texts(conn)),
+                                        period)))
     if result.error:
         print(f"Skill-Gruppen nicht aktualisiert: {result.error}", file=sys.stderr)
         return 1
@@ -438,6 +443,8 @@ def main(argv: list[str] | None = None) -> int:
     dashboard.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
     market = sub.add_parser("market", help="Marktbericht: aktive Firmen und Skill-Gruppen (bis zu 3 KI-Aufrufe)")
     market.add_argument("--regroup", action="store_true", help="Alle Skill-Gruppen verwerfen und neu bilden")
+    market.add_argument("--since", type=date.fromisoformat, help="Skill-Tabelle: erster Tag (JJJJ-MM-TT)")
+    market.add_argument("--until", type=date.fromisoformat, help="Skill-Tabelle: letzter Tag (JJJJ-MM-TT)")
     sub.add_parser("check-injection", help="Prompts gegen eingeschleuste Anweisungen prüfen (2 KI-Aufrufe)")
     report = sub.add_parser("report", help="Wochenbericht mit Empfehlungen jetzt erstellen (1 KI-Aufruf)")
     report.add_argument("--dry-run", action="store_true", help="Nur die Eingabe für die KI zeigen, ohne Aufruf")
@@ -492,7 +499,7 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_eval(cfg, args.changes, args.since, args.until, args.split, args.scores, args.by, args.funnel,
                             args.usage)
         elif args.command == "market":
-            return cmd_market(cfg, args.regroup)
+            return cmd_market(cfg, args.regroup, args.since, args.until)
         elif args.command == "check-injection":
             return cmd_check_injection(cfg)
     except ConfigError as e:
