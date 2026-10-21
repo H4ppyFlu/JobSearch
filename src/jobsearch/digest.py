@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from . import usage
+from .evaluation import day_usage
 from .scoring import ScoreCounts, backlog
 
 TIER_TITLES = {3: "★★★ Sehr passend", 2: "★★ Teilweise passend", 1: "★ Wenig passend"}
@@ -25,6 +27,7 @@ class DayReport:
     jobs: dict[int, list[dict]] = field(default_factory=lambda: {3: [], 2: [], 1: []})
     reopenings: list[dict] = field(default_factory=list)
     backlog: int = 0
+    ai_usage: usage.Usage = field(default_factory=usage.Usage)
 
     @property
     def new_good(self) -> dict[int, int]:
@@ -51,6 +54,7 @@ def collect_day(conn: sqlite3.Connection, day: date) -> DayReport:
            WHERE j.first_seen = ? ORDER BY j.id""",
         (day.isoformat(),),
     )]
+    report.ai_usage = day_usage(conn, day.isoformat())
     return report
 
 
@@ -80,6 +84,8 @@ def render(report: DayReport, scoring: ScoreCounts | None = None, warnings: list
     total = sum(len(v) for v in report.jobs.values())
     lines = [f"# Jobs vom {report.day:%d.%m.%Y}", ""]
     lines.append(f"{total} neu bewertete Jobs in Reichweite. Warten auf Bewertung: {report.backlog}.")
+    if report.ai_usage.calls:
+        lines += ["", f"KI-Verbrauch heute: {usage.summary(report.ai_usage)}"]
     if scoring and scoring.error:
         lines += ["", f"> ⚠️ Die Bewertung ist fehlgeschlagen: {scoring.error}"]
     if scoring and scoring.injection_suspected:

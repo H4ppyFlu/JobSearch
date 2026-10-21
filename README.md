@@ -66,6 +66,7 @@ flowchart LR
 - **AI failure never blocks collection.** If scoring fails, the run still counts as collected, the Jobs wait as unscored, and the error is stored with the run.
 - **Uncertainty is shown, not hidden.** Jobs scored from a short mail snippet are marked low confidence. Rule decisions store their reason, so wrong filters can be found.
 - **Human in the loop.** The candidate sets a Job status with an optional Feedback note in the dashboard, and recent notes go into the next scoring prompt.
+- **AI usage is measured.** Every `claude -p` call, retries included, is stored with its purpose, tokens and API equivalent (the list price the call would cost through the API). `status` and the Digest show a line, `jobsearch eval --usage` the details and the API equivalent per scored Job, per ★★★/★★ Job and per career page. It is neither a real cost nor a share of the subscription quota, whose limit is not published in tokens and which also covers interactive use.
 - **Tests never call the AI.** `ai.py` is the only module that runs `claude -p`, and tests replace it with a fake.
 
 ## Setup
@@ -111,6 +112,7 @@ A term you accept in the repo, for example a common technical word that is also 
 .venv\Scripts\python -m jobsearch eval --scores [--by model|profile|prompt|month]  # Fit score against Job status
 .venv\Scripts\python -m jobsearch eval --funnel  # where openings found elsewhere got lost
 .venv\Scripts\python -m jobsearch eval --changes  # when settings changed (prompt, Profile, Search terms, ...)
+.venv\Scripts\python -m jobsearch eval --usage  # AI usage: tokens and API equivalent per day, purpose and model
 .venv\Scripts\python -m jobsearch check-injection  # prompts against injected instructions (2 AI calls)
 .venv\Scripts\python -m jobsearch install-task    # run automatically 5 minutes after each logon
 .venv\Scripts\python -m jobsearch uninstall-task  # remove that task again

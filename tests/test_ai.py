@@ -143,3 +143,17 @@ def test_a_failing_recorder_does_not_cost_the_answer():
 def test_unknown_purpose_is_refused():
     with pytest.raises(ValueError, match="purpose"):
         ask(FakeRunner(), purpose="scorring")
+
+
+def test_usage_falls_back_to_the_call_wide_fields_without_model_usage():
+    out = json.dumps({"type": "result", "is_error": True, "result": "something broke", "total_cost_usd": 0.02,
+                      "usage": {"input_tokens": 3, "output_tokens": 50, "cache_read_input_tokens": 100,
+                                "cache_creation_input_tokens": 200,
+                                "server_tool_use": {"web_search_requests": 1}}})
+    recorded = []
+    with pytest.raises(ai.AiError):
+        ask(FakeRunner((out, 1, "")), recorder=recorded.append)
+    [u] = recorded
+    assert (u.model, u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_creation_tokens) == (
+        "sonnet", 3, 50, 100, 200)
+    assert (u.web_search_requests, u.thinking_tokens, u.cost_usd) == (1, None, 0.02)

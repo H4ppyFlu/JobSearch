@@ -106,6 +106,14 @@ _Avoid_: Rating, feedback
 An opening the candidate found outside the tool and recorded in `private/found_elsewhere.csv`. Tracing it shows the Stage where the pipeline lost it, including openings never collected at all.
 _Avoid_: External job. In German output it is "Fremdfund".
 
+**AI usage**:
+The measured tokens, duration and API equivalent of every `claude -p` call, recorded per purpose (scoring, career extraction, ...), retries included.
+_Avoid_: Cost, quota. In German output it is "KI-Verbrauch".
+
+**API equivalent**:
+The list price the same calls would cost through the API. The AI runs on the subscription, so it is neither a real cost nor a share of the quota.
+_Avoid_: Cost, price. In German output it is "API-Gegenwert".
+
 ### Trust
 
 **Third-party text**:

@@ -23,6 +23,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
+from .usage import PURPOSES, CallUsage, from_envelope
+
 log = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 900
@@ -43,30 +45,6 @@ class InvalidAnswer(ValueError):
 class Answer:
     data: dict
     model: str  # the model that actually answered, e.g. claude-sonnet-5-5
-
-
-# What each call is for, so the AI usage can be told apart per purpose.
-PURPOSES = frozenset({"scoring", "career_extract", "career_setup", "search_terms", "check_injection",
-                      "weekly_report", "skill_groups"})
-
-
-@dataclass(frozen=True)
-class CallUsage:
-    """One claude -p process. Token and cost fields are None when no answer envelope arrived."""
-    purpose: str
-    model: str
-    attempt: int
-    outcome: str  # ok | invalid | error | timeout
-    started_at: str
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    cache_read_tokens: int | None = None
-    cache_creation_tokens: int | None = None
-    thinking_tokens: int | None = None
-    web_search_requests: int | None = None
-    cost_usd: float | None = None  # list price through the API, nothing is billed
-    duration_ms: int | None = None
-    num_turns: int | None = None
 
 
 UsageRecorder = Callable[[CallUsage], None]
@@ -120,27 +98,6 @@ def _parse(proc: subprocess.CompletedProcess, envelope: dict | None) -> tuple[di
     return envelope.get("structured_output"), (models[0] if models else "")
 
 
-def _usage(envelope: dict | None, *, purpose: str, model: str, attempt: int, outcome: str,
-           started_at: str) -> CallUsage:
-    """Usage from modelUsage, summed over the models that answered."""
-    base = CallUsage(purpose, model, attempt, outcome, started_at)
-    if envelope is None:
-        return base
-    per_model = envelope.get("modelUsage") or {}
-
-    def total(key: str):
-        values = [m[key] for m in per_model.values() if isinstance(m, dict) and m.get(key) is not None]
-        return sum(values) if values else None
-
-    return CallUsage(
-        purpose, ", ".join(per_model) or model, attempt, outcome, started_at,
-        input_tokens=total("inputTokens"), output_tokens=total("outputTokens"),
-        cache_read_tokens=total("cacheReadInputTokens"), cache_creation_tokens=total("cacheCreationInputTokens"),
-        thinking_tokens=total("thinkingTokens"), web_search_requests=total("webSearchRequests"),
-        cost_usd=total("costUSD"), duration_ms=envelope.get("duration_ms"), num_turns=envelope.get("num_turns"),
-    )
-
-
 def _record(recorder: UsageRecorder | None, usage: CallUsage) -> None:
     if recorder is None:
         return
@@ -177,7 +134,7 @@ def ask(
             proc = runner(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
                           timeout=timeout, cwd=tempfile.gettempdir(), creationflags=NO_WINDOW)
         except subprocess.TimeoutExpired:
-            _record(usage_recorder, _usage(None, outcome="timeout", **usage))
+            _record(usage_recorder, from_envelope(None, outcome="timeout", **usage))
             raise AiError(f"Claude hat nach {timeout // 60} Minuten nicht geantwortet.") from None
         envelope = _envelope(proc)
         if envelope is not None:  # the raw numbers next to the stored row, for checking by hand
@@ -186,7 +143,7 @@ def ask(
         try:
             data, used_model = _parse(proc, envelope)
         except AiError:
-            _record(usage_recorder, _usage(envelope, outcome="error", **usage))
+            _record(usage_recorder, from_envelope(envelope, outcome="error", **usage))
             raise
         try:
             if not isinstance(data, dict):
@@ -194,10 +151,10 @@ def ask(
             if check:
                 check(data)
         except InvalidAnswer as e:
-            _record(usage_recorder, _usage(envelope, outcome="invalid", **usage))
+            _record(usage_recorder, from_envelope(envelope, outcome="invalid", **usage))
             problem = str(e)
             log.warning("Invalid AI answer (attempt %d): %s", attempt, problem)
         else:
-            _record(usage_recorder, _usage(envelope, outcome="ok", **usage))
+            _record(usage_recorder, from_envelope(envelope, outcome="ok", **usage))
             return Answer(data, used_model or model)
     raise AiError(f"Claude hat zweimal keine brauchbare Antwort geliefert: {problem}")

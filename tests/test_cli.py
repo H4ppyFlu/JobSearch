@@ -1,11 +1,13 @@
 import dataclasses
 import shutil
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
 from jobsearch.career import ScanCounts
-from jobsearch.cli import career_summary, cmd_daily
+from jobsearch import db, usage
+from jobsearch.cli import career_summary, cmd_daily, cmd_status
 from jobsearch.config import ConfigError
 from tests.conftest import TERMS, TermsAi
 
@@ -68,3 +70,13 @@ def test_career_summary_names_dropped_postings_only_when_there_are_some():
     assert "verworfen" not in career_summary(counts)
     counts.ungrounded = 2
     assert career_summary(counts).endswith(", verworfen (nicht im Seitentext): 2")
+
+
+def test_status_shows_the_ai_usage_of_the_last_seven_days(cfg, capsys):
+    record = db.usage_recorder(db.connect(cfg.db_path))
+    today = date.today()
+    for day, cost in ((today, 0.04), (today - timedelta(days=6), 0.02), (today - timedelta(days=7), 5.0)):
+        record(usage.CallUsage("scoring", "claude-test", 1, "ok", f"{day.isoformat()}T08:00:00", input_tokens=2,
+                            output_tokens=400, cache_read_tokens=0, cache_creation_tokens=9000, cost_usd=cost))
+    cmd_status(cfg)
+    assert "KI-Verbrauch (7 Tage): 2 Aufrufe, API-Gegenwert 0.060 $" in capsys.readouterr().out

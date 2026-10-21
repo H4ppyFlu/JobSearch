@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from jobsearch import ai, db
+from jobsearch import ai, db, usage
 from jobsearch.config import Config
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -66,7 +66,7 @@ def add_job(conn, title, eligibility="eligible", reason=None, description="Aufga
 def record_usage(usage_recorder, purpose: str, model: str = "claude-test") -> None:
     """What ai.ask reports for one successful attempt, for fakes that stand in for it."""
     if usage_recorder:
-        usage_recorder(ai.CallUsage(purpose, model, 1, "ok", "2026-10-15T08:00:00", input_tokens=10,
+        usage_recorder(usage.CallUsage(purpose, model, 1, "ok", "2026-10-15T08:00:00", input_tokens=10,
                                     output_tokens=20, cost_usd=0.01))
 
 

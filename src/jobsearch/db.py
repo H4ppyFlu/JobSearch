@@ -14,7 +14,7 @@ from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
-from .ai import CallUsage
+from .usage import CallUsage
 
 
 def now() -> str:

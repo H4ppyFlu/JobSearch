@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from jobsearch import ai, digest, notify, prompts
+from jobsearch import ai, db, digest, notify, prompts, usage
 from jobsearch.eligibility import HOMEOFFICE_REASON
 from jobsearch.scoring import AI_NOT_REMOTE_REASON, run_scoring
 
@@ -160,3 +160,18 @@ def test_ai_usage_is_recorded_with_the_score_run(conn, cfg):
     run_scoring(conn, cfg, ask=FakeAi())
     run_id = conn.execute("SELECT id FROM runs WHERE kind = 'score'").fetchone()[0]
     assert ai_calls(conn) == [("scoring", run_id, "ok")]
+
+
+def test_digest_names_the_ai_usage_of_the_day(conn, tmp_path):
+    record = db.usage_recorder(conn)
+    for started_at, cost in (("2026-10-14T08:00:00", 9.0), ("2026-10-15T08:00:00", 0.04),
+                             ("2026-10-15T09:00:00", 0.02)):
+        record(usage.CallUsage("scoring", "claude-test", 1, "ok", started_at, input_tokens=2, output_tokens=400,
+                            cache_read_tokens=1000, cache_creation_tokens=9000, cost_usd=cost))
+    text = digest.write_digest(conn, tmp_path, date(2026, 10, 15))[0].read_text(encoding="utf-8")
+    assert ("KI-Verbrauch heute: 2 Aufrufe, API-Gegenwert 0.060 $ (Tokens: Eingabe 4, Ausgabe 800, Cache gelesen 2.000, "
+            "Cache geschrieben 18.000)") in text
+
+
+def test_digest_without_ai_calls_has_no_usage_line(conn, tmp_path):
+    assert "KI-Verbrauch" not in digest.write_digest(conn, tmp_path, date(2026, 10, 15))[0].read_text(encoding="utf-8")

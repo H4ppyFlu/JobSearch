@@ -1,6 +1,6 @@
 # Issue: Track AI usage per call
 
-Status: Part 1 done (2026-10-21). Implement on branch `implement-ai-usage`. Implement before `weekly-report` and `market-report`, so their new AI calls are measured from the start.
+Status: Parts 1 and 2 done (2026-10-21). Implement on branch `implement-ai-usage`. Implement before `weekly-report` and `market-report`, so their new AI calls are measured from the start.
 
 ## Goal
 
@@ -50,7 +50,7 @@ Two limits belong in the help text and the docs:
 ## Part 2: Show
 
 - `jobsearch status`: one line for the last 7 days: calls, tokens by kind, API equivalent.
-- The Digest: one line "KI heute: n Aufrufe, x Tokens, API-Gegenwert y $" over all calls of the day.
+- The Digest: one line "KI-Verbrauch heute: n Aufrufe, API-Gegenwert y $ (Tokens: Eingabe …, Ausgabe …, Cache gelesen …, Cache geschrieben …)" over all calls of the day. (Changed during implementation: tokens broken down by kind, as the rule below asks, not one sum.)
 - `jobsearch eval --usage`, with `--since`, `--until` and `--split` like the other eval views:
   - a table per day, per purpose and per model: calls, input, output, cache read, cache write, API equivalent;
   - API equivalent per scored Job, per ★★★/★★ Job, and per career page sent to the AI;

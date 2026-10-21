@@ -12,7 +12,7 @@ import time
 from datetime import date, timedelta
 from logging.handlers import RotatingFileHandler
 
-from . import ai, config, db, evaluation, geo, guard, scheduler
+from . import ai, config, db, evaluation, geo, guard, scheduler, usage
 from .career import ScanCounts, run_career_scan, scan_due
 from .companies import load_target_companies
 from .config import Config, ConfigError
@@ -105,6 +105,10 @@ def cmd_status(cfg: Config) -> None:
     if pages["n"]:
         print(f"Karriereseiten: {pages['n']} geprüft, zuletzt fehlgeschlagen: {pages['failing']}, "
               f"ohne Stellen: {pages['empty']}")
+    week = evaluation.Period("7 Tage", (date.today() - timedelta(days=6)).isoformat())
+    week_usage = evaluation.usage_metrics(conn, week).total
+    if week_usage.calls:
+        print(f"KI-Verbrauch (7 Tage): {usage.summary(week_usage)}")
     print("Letzte Läufe:")
     for row in conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 5"):
         state = {1: "ok", 0: "FEHLER", None: "läuft/abgebrochen"}[row["ok"]]
@@ -259,18 +263,22 @@ def cmd_career_scan(cfg: Config) -> int:
     return 1 if warnings else 0
 
 
+def recording_ask(conn):
+    """ai.ask that stores its AI usage without a run, for the commands that start none."""
+    return functools.partial(ai.ask, usage_recorder=db.usage_recorder(conn))
+
+
 def cmd_career_setup(cfg: Config, recheck: bool) -> int:
     from .career_setup import run_setup
 
+    conn = db.connect(cfg.db_path)
     problems = {}
     if recheck:
-        conn = db.connect(cfg.db_path)
         problems = {r["company"]: r["last_error"] or "die Seite zeigt keine Stellen"
                     for r in conn.execute("SELECT * FROM career_pages WHERE fail_count > 0 OR empty_count > 0")}
         print(f"Prüfe {len(problems)} Karriereseiten neu, die fehlschlugen oder keine Stellen zeigten.")
     print("Suche Karriereseiten mit Websuche, das dauert ein paar Minuten ...")
-    ask = functools.partial(ai.ask, usage_recorder=db.usage_recorder(db.connect(cfg.db_path)))
-    result = run_setup(cfg.companies_path, model=cfg.model_scoring, ask=ask, recheck=problems)
+    result = run_setup(cfg.companies_path, model=cfg.model_scoring, ask=recording_ask(conn), recheck=problems)
     print(f"Karriereseiten eingetragen: {result.filled}")
     if result.not_found:
         print("Nicht gefunden: " + ", ".join(result.not_found))
@@ -289,8 +297,8 @@ def cmd_check_injection(cfg: Config) -> int:
 
     print("Injection-Check: 2 Aufrufe an Claude (Bewertung und Extraktion), gespeichert wird nur der KI-Verbrauch.")
     try:
-        ask = functools.partial(ai.ask, usage_recorder=db.usage_recorder(db.connect(cfg.db_path)))
-        report = injection.run(cfg, cfg.root / "tests" / "fixtures" / "injection", ask=ask)
+        report = injection.run(cfg, cfg.root / "tests" / "fixtures" / "injection",
+                               ask=recording_ask(db.connect(cfg.db_path)))
     except ai.AiError as e:
         print(f"Injection-Check abgebrochen: {e}", file=sys.stderr)
         return 1
@@ -306,7 +314,8 @@ def cmd_check_injection(cfg: Config) -> int:
 
 
 def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date | None = None,
-             split: date | None = None, scores: bool = False, by: str | None = None, funnel: bool = False) -> int:
+             split: date | None = None, scores: bool = False, by: str | None = None, funnel: bool = False,
+             usage: bool = False) -> int:
     conn = db.connect(cfg.db_path)
     if changes:
         print("\n".join(evaluation.changes_report(conn)))
@@ -321,7 +330,9 @@ def cmd_eval(cfg: Config, changes: bool, since: date | None = None, until: date 
     except ValueError as e:
         print(e, file=sys.stderr)
         return 2
-    if scores or by:
+    if usage:
+        print("\n".join(evaluation.usage_report(conn, chosen)))
+    elif scores or by:
         print("\n".join(evaluation.score_report(conn, chosen, by)))
     else:
         print("\n".join(evaluation.stage_report(conn, chosen)))
@@ -380,6 +391,11 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument("--by", choices=evaluation.GROUPS, help="Fit scores gruppieren (schließt --scores ein)")
     evaluate.add_argument("--funnel", action="store_true",
                           help="Wo Stellen aus private/found_elsewhere.csv verloren gingen")
+    evaluate.add_argument("--usage", action="store_true",
+                          help="KI-Verbrauch: Tokens und API-Gegenwert je Tag, Zweck und Modell. Der API-Gegenwert "
+                               "ist der Listenpreis über die API, kein echter Preis (die Aufrufe laufen über das "
+                               "Abo), und kein Anteil am Kontingent (dessen Grenze ist nicht in Tokens bekannt, "
+                               "und die interaktive Nutzung fehlt)")
     args = parser.parse_args(argv)
 
     try:
@@ -411,7 +427,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "dashboard":
             return cmd_dashboard(cfg, args.port, not args.no_browser)
         elif args.command == "eval":
-            return cmd_eval(cfg, args.changes, args.since, args.until, args.split, args.scores, args.by, args.funnel)
+            return cmd_eval(cfg, args.changes, args.since, args.until, args.split, args.scores, args.by, args.funnel,
+                            args.usage)
         elif args.command == "check-injection":
             return cmd_check_injection(cfg)
     except ConfigError as e:

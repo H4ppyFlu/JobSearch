@@ -100,10 +100,11 @@ class RecordingAi:
     def __init__(self, scores=CLEAN_SCORES, page=CLEAN_PAGE):
         self.scores, self.page = scores, page
         self.calls = []
+        self.purposes = []
 
     def __call__(self, prompt, *, purpose, model, schema, system, check=None, tools=(), usage_recorder=None):
         self.calls.append((prompt, model, tools))
-        self.purposes = getattr(self, "purposes", []) + [purpose]
+        self.purposes.append(purpose)
         data = self.scores if "# Jobs" in prompt else self.page
         if check:
             check(data)

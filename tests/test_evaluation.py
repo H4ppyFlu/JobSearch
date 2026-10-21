@@ -1,16 +1,18 @@
+import dataclasses
+import sqlite3
 import json
 from collections import Counter
 from datetime import date
 
 import pytest
 
-from jobsearch import db
+from jobsearch import db, usage
 from jobsearch.cli import cmd_eval
 from jobsearch.eligibility import NOT_FULLY_REMOTE_REASON
 from jobsearch.config import ConfigError
 from jobsearch.evaluation import (Found, Period, changes, changes_report, describe, funnel_report, label, periods,
                                   read_found, reason_kind, score_report, score_tables, stage_metrics, stage_report, term_metrics,
-                                  trace)
+                                  trace, usage_metrics, usage_report)
 from jobsearch.scoring import AI_NOT_REMOTE_REASON
 
 from .conftest import add_job
@@ -277,3 +279,131 @@ def test_a_found_file_saved_with_bom_keeps_its_company_column(tmp_path):
     path = write_found(tmp_path / "found.csv", ("Muster GmbH", "Planer", "", ""))
     path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8-sig")
     assert read_found(path) == [Found("Muster GmbH", "Planer", "", "")]
+
+
+# --- AI usage ------------------------------------------------------------------------------------
+
+def add_call(conn, started_at, purpose="scoring", cost=0.04, attempt=1, model="claude-sonnet-test",
+             outcome="ok", tokens=(2, 400, 1000, 9000), run_id=None):
+    inp, out, read, write = tokens
+    db.usage_recorder(conn, run_id)(usage.CallUsage(purpose, model, attempt, outcome, started_at, input_tokens=inp,
+                                                  output_tokens=out, cache_read_tokens=read,
+                                                  cache_creation_tokens=write, cost_usd=cost))
+
+
+def test_usage_is_summed_per_purpose_within_the_period(conn):
+    add_call(conn, "2026-10-14T08:00:00", cost=1.0)  # before the period
+    add_call(conn, "2026-10-15T08:00:00", cost=0.04)
+    add_call(conn, "2026-10-15T08:05:00", purpose="career_extract", cost=0.01, model="claude-haiku-test")
+    add_call(conn, "2026-10-16T08:00:00", cost=0.06, attempt=2, outcome="ok")
+    m = usage_metrics(conn, Period("x", "2026-10-15"))
+    scoring = m.by_purpose["scoring"]
+    assert (scoring.calls, scoring["output_tokens"], scoring["cache_creation_tokens"]) == (2, 800, 18000)
+    assert scoring.cost_usd == pytest.approx(0.10)
+    assert m.by_purpose["career_extract"].calls == 1
+    assert set(m.by_day) == {"2026-10-15", "2026-10-16"}
+    assert set(m.by_model) == {"claude-sonnet-test", "claude-haiku-test"}
+    assert m.total.cost_usd == pytest.approx(0.11)
+
+
+def add_tier(conn, tier, scored_at):
+    job = add_job(conn, f"Planer {tier} {scored_at}")
+    with conn:
+        conn.execute("""INSERT INTO fit_scores (job_id, tier, reasoning, profile_hash, model, scored_at)
+                        VALUES (?, ?, 'Passt.', 'ppp', 'claude-test', ?)""", (job, tier, scored_at))
+
+
+def test_api_equivalent_per_job_and_page_counts_only_what_happened_since_recording_began(conn):
+    add_tier(conn, 3, "2026-10-14T08:00:00")  # scored before the first recorded call: free, so left out
+    add_call(conn, "2026-10-15T08:00:00", cost=0.30)
+    add_call(conn, "2026-10-15T08:01:00", purpose="search_terms", cost=0.10)
+    add_call(conn, "2026-10-15T09:00:00", purpose="career_extract", cost=0.08)
+    for tier in (3, 2, 1, 1, 1, 1):
+        add_tier(conn, tier, "2026-10-15T08:02:00")
+    add_run(conn, "2026-10-13T09:00:00", None, kind="career_scan")  # before recording
+    add_run(conn, "2026-10-15T09:00:00", None, kind="career_scan")
+    with conn:
+        conn.execute("UPDATE runs SET counts_json = ? WHERE kind = 'career_scan'", (json.dumps({"extracted": 4}),))
+    m = usage_metrics(conn, Period("gesamt"))
+    assert m.recording_since == "2026-10-15"
+    assert (m.scored, m.good, m.pages) == (6, 2, 4)
+    assert m.per_scored == pytest.approx(0.05)  # scoring calls only
+    assert m.per_good == pytest.approx(0.24)  # every purpose: what a good match costs
+    assert m.per_page == pytest.approx(0.02)
+
+
+def test_api_equivalent_per_job_is_none_without_jobs(conn):
+    add_call(conn, "2026-10-15T08:00:00")
+    m = usage_metrics(conn, Period("gesamt"))
+    assert (m.per_scored, m.per_good, m.per_page) == (None, None, None)
+
+
+def test_retry_share_and_fixed_overhead_per_purpose(conn):
+    add_call(conn, "2026-10-15T08:00:00", outcome="invalid", tokens=(2, 400, 0, 9000))
+    add_call(conn, "2026-10-15T08:01:00", attempt=2, tokens=(2, 400, 8000, 1000))
+    add_call(conn, "2026-10-16T08:00:00", tokens=(2, 400, 6000, 0))
+    add_call(conn, "2026-10-16T08:05:00", outcome="timeout", tokens=(None, None, None, None))  # no envelope
+    m = usage_metrics(conn, Period("gesamt"))
+    assert m.retries["scoring"] == 1
+    assert m.cache_per_call["scoring"] == pytest.approx(8000)  # cache tokens per call that reported any
+
+
+def test_usage_report_puts_the_periods_side_by_side_and_names_its_limits(conn):
+    add_call(conn, "2026-10-15T08:00:00", cost=0.30)
+    add_call(conn, "2026-10-17T08:00:00", purpose="career_extract", cost=0.02, model="claude-haiku-test")
+    add_tier(conn, 3, "2026-10-17T08:02:00")
+    lines = usage_report(conn, periods(None, None, "2026-10-16"))
+    text = "\n".join(lines)
+    assert "vor 2026-10-16" in text and "ab 2026-10-16" in text
+    assert "API-Gegenwert (Listenpreis)" in text
+    assert "kein echter Preis" in text and "Kontingent" in text
+    assert "gezählt ab 2026-10-15" in text
+    assert "Karriereseiten auslesen" in text and "claude-haiku-test" in text
+
+
+def test_usage_report_without_recorded_calls(conn):
+    assert "Noch keine KI-Aufrufe aufgezeichnet" in "\n".join(usage_report(conn, periods(None, None, None)))
+
+
+def test_eval_usage_command(cfg, capsys):
+    add_call(db.connect(cfg.db_path), "2026-10-15T08:00:00")
+    assert cmd_eval(cfg, changes=False, usage=True) == 0
+    assert "API-Gegenwert" in capsys.readouterr().out
+
+
+def test_scores_earlier_on_the_day_recording_began_are_left_out(conn):
+    add_tier(conn, 3, "2026-10-15T07:00:00")  # the morning run, before the first recorded call
+    add_run(conn, "2026-10-15T07:00:00", None, kind="career_scan")
+    with conn:
+        conn.execute("UPDATE runs SET counts_json = ? WHERE kind = 'career_scan'", (json.dumps({"extracted": 4}),))
+    add_call(conn, "2026-10-15T11:00:00", cost=0.04)
+    add_tier(conn, 2, "2026-10-15T11:00:05")
+    m = usage_metrics(conn, Period("gesamt"))
+    assert (m.scored, m.good, m.pages) == (1, 1, 0)
+    assert m.per_scored == pytest.approx(0.04)
+
+
+def test_a_row_with_only_one_cache_count_still_counts_for_the_overhead(conn):
+    add_call(conn, "2026-10-15T08:00:00", tokens=(2, 400, 6000, None))
+    assert usage_metrics(conn, Period("gesamt")).cache_per_call["scoring"] == pytest.approx(6000)
+
+
+def test_ai_calls_has_a_column_for_every_call_usage_field(conn):
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(ai_calls)")}
+    assert columns == {f.name for f in dataclasses.fields(usage.CallUsage)} | {"id", "run_id"}
+
+
+def test_migration_007_adds_ai_calls_to_an_existing_database(tmp_path):
+    path = tmp_path / "old.sqlite"
+    old = sqlite3.connect(path)
+    for version, sql in db._migrations():
+        if version <= 6:
+            old.executescript(sql)
+    old.execute("PRAGMA user_version = 6")
+    old.execute("INSERT INTO runs (kind, started_at) VALUES ('daily', '2026-10-14T08:00:00')")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    add_call(conn, "2026-10-15T08:00:00", run_id=1)
+    assert conn.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
+    assert conn.execute("SELECT run_id FROM ai_calls").fetchone()[0] == 1

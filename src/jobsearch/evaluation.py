@@ -8,6 +8,8 @@
   per tier, optionally grouped by model, Profile, prompt version or month.
 - Found elsewhere (`jobsearch eval --funnel`): openings the candidate found outside the tool, and the
   stage where the pipeline lost each one. This is the only part that sees what was never collected.
+- AI usage (`jobsearch eval --usage`): tokens and API equivalent of the claude -p calls, per day,
+  purpose and model, and the API equivalent per scored Job, per good Job and per career page.
 """
 
 from __future__ import annotations
@@ -18,13 +20,16 @@ import re
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
 
+from . import usage
 from .companies import normalize_company
 from .config import ConfigError
 from .eligibility import NOT_FULLY_REMOTE_REASON
 from .matching import SIMILAR_TITLE, title_similarity, title_tokens
 from .scoring import AI_NOT_REMOTE_REASON
+from .usage import Usage
 
 LABELS = {
     "model_scoring": "Modell Bewertung",
@@ -465,4 +470,103 @@ def funnel_report(conn: sqlite3.Connection, path: Path) -> list[str]:
     for t in traces:
         what = " – ".join(x for x in (t.found.company, t.found.title or t.found.url) if x)
         lines.append(f"  {what}: {STAGES[t.stage][0]}" + (f" ({t.detail})" if t.detail else ""))
+    return lines
+
+
+# --- AI usage ------------------------------------------------------------------------------------
+
+@dataclass
+class UsageMetrics:
+    total: Usage = field(default_factory=Usage)
+    by_day: dict[str, Usage] = field(default_factory=dict)
+    by_purpose: dict[str, Usage] = field(default_factory=dict)
+    by_model: dict[str, Usage] = field(default_factory=dict)
+    recording_since: str | None = None  # first day with a recorded call; nothing before it is counted
+    scored: int = 0  # Fit scores since then
+    good: int = 0  # ★★★ and ★★ among them
+    pages: int = 0  # career pages sent to the AI since then
+    retries: Counter = field(default_factory=Counter)  # second attempts per purpose
+    # Fixed overhead ("Grundlast"): cache tokens read and written per call, per purpose. The system
+    # prompt, schema and Profile come with every call, so it shows what batching saves.
+    cache_per_call: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def per_scored(self) -> float | None:
+        return _per(self.by_purpose.get("scoring", Usage()).cost_usd, self.scored)
+
+    @property
+    def per_good(self) -> float | None:
+        return _per(self.total.cost_usd, self.good)
+
+    @property
+    def per_page(self) -> float | None:
+        return _per(self.by_purpose.get("career_extract", Usage()).cost_usd, self.pages)
+
+
+def _per(cost: float, n: int) -> float | None:
+    return cost / n if n else None
+
+
+def usage_metrics(conn: sqlite3.Connection, period: Period) -> UsageMetrics:
+    m = UsageMetrics()
+    first = conn.execute("SELECT min(started_at) FROM ai_calls").fetchone()[0]
+    if not first:
+        return m
+    m.recording_since = first[:10]
+    # Scores and scans from before the first recorded call would look free, so they are left out,
+    # to the second: the day recording began usually had a run before it. A scan counts by its end,
+    # since its run starts before its AI call.
+    cond, params = period.where("scored_at")
+    m.scored, m.good = conn.execute(
+        f"""SELECT count(*), coalesce(sum(tier >= 2), 0) FROM fit_scores WHERE {cond} AND scored_at >= ?""",
+        [*params, first]).fetchone()
+    cond, params = period.where("started_at")
+    m.pages = sum(json.loads(r["counts_json"] or "{}").get("extracted", 0) for r in conn.execute(
+        f"""SELECT counts_json FROM runs WHERE kind = 'career_scan' AND {cond}
+            AND coalesce(finished_at, started_at) >= ?""", [*params, first]))
+    cond, params = period.where("started_at")
+    cache: dict[str, list[int]] = {}
+    for row in conn.execute(f"SELECT * FROM ai_calls WHERE {cond} ORDER BY id", params):
+        m.total.add(row)
+        for groups, key in ((m.by_day, row["started_at"][:10]), (m.by_purpose, row["purpose"]),
+                            (m.by_model, row["model"])):
+            groups.setdefault(key, Usage()).add(row)
+        m.retries[row["purpose"]] += row["attempt"] == 2
+        if row["cache_read_tokens"] is not None or row["cache_creation_tokens"] is not None:  # not a timeout
+            cache.setdefault(row["purpose"], []).append((row["cache_read_tokens"] or 0)
+                                                        + (row["cache_creation_tokens"] or 0))
+    m.cache_per_call = {purpose: sum(v) / len(v) for purpose, v in cache.items()}
+    return m
+
+
+def day_usage(conn: sqlite3.Connection, day: str) -> Usage:
+    """The AI usage of one day (YYYY-MM-DD), for the Digest."""
+    return usage_metrics(conn, Period(day, day, (date.fromisoformat(day) + timedelta(days=1)).isoformat())).total
+
+
+def usage_report(conn: sqlite3.Connection, chosen: list[Period]) -> list[str]:
+    ms = [usage_metrics(conn, p) for p in chosen]
+    if not ms[0].recording_since:
+        return ["Noch keine KI-Aufrufe aufgezeichnet."]
+    lines = [f"KI-Verbrauch, API-Gegenwert (Listenpreis) in Dollar, gezählt ab {ms[0].recording_since}.",
+             "Das ist kein echter Preis (die Aufrufe laufen über das Abo) und kein Anteil am Kontingent:",
+             "dessen Grenze ist nicht in Tokens bekannt, und die interaktive Nutzung fehlt hier."]
+    rows = [("Aufrufe", [str(m.total.calls) for m in ms]),
+            ("API-Gegenwert", [usage.money(m.total.cost_usd) for m in ms]),
+            ("  pro bewertetem Job", [usage.money(m.per_scored) for m in ms]),
+            ("  pro ★★★/★★-Job (alle Zwecke)", [usage.money(m.per_good) for m in ms]),
+            ("  pro ausgelesener Karriereseite", [usage.money(m.per_page) for m in ms])]
+    lines += [""] + _table([p.label for p in chosen], rows)
+    for period, m in zip(chosen, ms):
+        if not m.total.calls:
+            continue
+        lines += ["", f"Nach Zweck ({period.label}; Grundlast = Cache-Tokens pro Aufruf):"]
+        lines += _table(usage.HEADER + ["Wiederholt", "Grundlast"],
+                        [(usage.PURPOSES.get(p, p), usage.values(u) + [_share(m.retries[p], u.calls),
+                                                                      usage.tokens(m.cache_per_call.get(p, 0))])
+                         for p, u in sorted(m.by_purpose.items(), key=lambda kv: -kv[1].cost_usd)])
+        lines += ["", f"Nach Modell ({period.label}):"]
+        lines += _table(usage.HEADER, [(model, usage.values(u)) for model, u in sorted(m.by_model.items())])
+        lines += ["", f"Nach Tag ({period.label}):"]
+        lines += _table(usage.HEADER, [(day, usage.values(u)) for day, u in sorted(m.by_day.items())])
     return lines
