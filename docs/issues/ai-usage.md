@@ -1,6 +1,6 @@
 # Issue: Track AI usage per call
 
-Status: Parts 1 and 2 done (2026-10-21). Implement on branch `implement-ai-usage`. Implement before `weekly-report` and `market-report`, so their new AI calls are measured from the start.
+Status: done (2026-10-21), merged into `main`.
 
 ## Goal
 
