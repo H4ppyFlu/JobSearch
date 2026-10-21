@@ -1,6 +1,6 @@
 # Issue: Track AI usage per call
 
-Status: open. Implement on branch `implement-ai-usage`. Implement before `weekly-report` and `market-report`, so their new AI calls are measured from the start.
+Status: Part 1 done (2026-10-21). Implement on branch `implement-ai-usage`. Implement before `weekly-report` and `market-report`, so their new AI calls are measured from the start.
 
 ## Goal
 
@@ -43,7 +43,7 @@ Two limits belong in the help text and the docs:
 
 ### Wiring
 
-- `cli.py` builds the recorder once per command with the current run id (or `None` for `career-setup`, `check-injection` and a `score` without a run) and passes `functools.partial(ai.ask, usage_recorder=recorder)` as `ask` to the callers. The callers pass their `purpose`; nothing else in them changes.
+- The recorder is built where the connection and the run id already are: `run_scoring` and `run_career_scan` start their own run (`db.start_run`) and pass `usage_recorder=db.usage_recorder(conn, run_id)`; `refresh_derived` runs before the Daily run starts and passes it without a run id. `career-setup` and `check-injection` have no connection of their own, so `cli.py` passes `functools.partial(ai.ask, usage_recorder=...)` as their `ask`, without a run id. (Changed during implementation: the CLI never knows the run id, since the modules start their runs themselves.)
 - Without a recorder nothing is stored, so existing tests keep working. New tests use a list as recorder.
 - No usage exists for calls before this change; the count starts with it.
 
@@ -83,7 +83,7 @@ No network, no `claude`; `runner` in `ai.ask()` is faked with canned envelopes:
 
 ## Done when
 
-A live Daily run writes `ai_calls` rows whose values match the envelope of the same call (checked once by logging the envelope at DEBUG next to the row), and `eval --usage` shows plausible numbers. Findings go into `docs/implementation-plan.md`.
+A live Daily run writes `ai_calls` rows whose values match the envelope of the same call (`ai.ask()` logs the envelope's usage at INFO for every call, so the log can be compared with the row), and `eval --usage` shows plausible numbers. Findings go into `docs/implementation-plan.md`.
 
 ## Out of scope (follow-ups)
 

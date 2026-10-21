@@ -11,7 +11,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from importlib import resources
 
-from . import ai
+from . import ai, db
 from .scoring import profile_hash
 
 log = logging.getLogger(__name__)
@@ -64,7 +64,8 @@ def refresh_derived(conn: sqlite3.Connection, profile: str, *, model: str, ask=a
     if is_current(conn, profile):
         return DerivedResult(previous)
     try:
-        answer = ask(build_prompt(profile), model=model, schema=SCHEMA, system=SYSTEM_PROMPT, check=check_answer)
+        answer = ask(build_prompt(profile), purpose="search_terms", model=model, schema=SCHEMA,
+                     system=SYSTEM_PROMPT, check=check_answer, usage_recorder=db.usage_recorder(conn))
     except ai.AiError as e:
         log.error("Deriving Search terms failed: %s", e)
         return DerivedResult(previous, error=str(e))

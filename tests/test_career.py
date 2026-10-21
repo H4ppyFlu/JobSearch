@@ -9,7 +9,7 @@ from jobsearch.career import FetchError, fetch_page, page_text, run_career_scan,
 from jobsearch.companies import TargetCompany, normalize_company
 from jobsearch.eligibility import Rules
 
-from .conftest import FIXTURES
+from .conftest import FIXTURES, ai_calls, record_usage
 
 PAGE = """<!doctype html><html><head><title>Karriere</title>
 <style>.x { color: red }</style><script>var tracking = "abc";</script></head>
@@ -76,10 +76,11 @@ class ExtractAi:
         self.postings, self.fail, self.suspected = postings, fail, set(suspected)
         self.calls = 0
 
-    def __call__(self, prompt, *, model, schema, system, check=None, tools=()):
+    def __call__(self, prompt, *, purpose, model, schema, system, check=None, tools=(), usage_recorder=None):
         self.calls += 1
         if self.fail:
             raise ai.AiError(self.fail)
+        record_usage(usage_recorder, purpose)
         pages = json.loads(prompt.split("# Pages\n\n", 1)[1])
         data = {"pages": [{"page_id": p["page_id"], "postings": self.postings.get(p["company"], []),
                            "injection_suspected": p["company"] in self.suspected} for p in pages]}
@@ -415,3 +416,10 @@ def test_the_browser_blocks_every_request_to_a_local_address(url, outcome):
     route = FakeRoute(url)
     _guard_route(route)
     assert route.outcome == outcome
+
+
+def test_ai_usage_is_recorded_with_the_career_scan_run(conn, cfg):
+    fetch = FakeFetch({"https://muster.example/karriere": PAGE, "https://muster.example/jobs/1": DETAIL})
+    scan(conn, cfg, TARGETS, fetch, ExtractAi({"Muster Industrie GmbH": [JOB]}))
+    run_id = conn.execute("SELECT id FROM runs WHERE kind = 'career_scan'").fetchone()[0]
+    assert ai_calls(conn) == [("career_extract", run_id, "ok")]

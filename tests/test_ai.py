@@ -11,9 +11,13 @@ def claude_on_path(monkeypatch):
     monkeypatch.setattr(ai.shutil, "which", lambda name: "claude")
 
 
-def envelope(structured=None, is_error=False, result="", model="claude-sonnet-test"):
-    return json.dumps({"type": "result", "is_error": is_error, "result": result,
-                       "structured_output": structured, "modelUsage": {model: {}}})
+def envelope(structured=None, is_error=False, result="", model="claude-sonnet-test", usage=None):
+    return json.dumps({"type": "result", "is_error": is_error, "result": result, "duration_ms": 1800,
+                       "num_turns": 2, "structured_output": structured, "modelUsage": {model: usage or {}}})
+
+
+USAGE = {"inputTokens": 12, "outputTokens": 340, "cacheReadInputTokens": 900, "cacheCreationInputTokens": 1600,
+         "thinkingTokens": 80, "webSearchRequests": 0, "costUSD": 0.0123}
 
 
 class FakeRunner:
@@ -29,8 +33,9 @@ class FakeRunner:
         return subprocess.CompletedProcess(cmd, code, stdout, stderr)
 
 
-def ask(runner, check=None):
-    return ai.ask("prompt", model="sonnet", schema={"type": "object"}, system="sys", check=check, runner=runner)
+def ask(runner, check=None, recorder=None, purpose="scoring"):
+    return ai.ask("prompt", model="sonnet", schema={"type": "object"}, system="sys", check=check, runner=runner,
+                  purpose=purpose, usage_recorder=recorder)
 
 
 def test_returns_structured_answer_and_model():
@@ -78,3 +83,63 @@ def test_missing_cli(monkeypatch):
     monkeypatch.setattr(ai.shutil, "which", lambda name: None)
     with pytest.raises(ai.AiError, match="nicht gefunden"):
         ask(FakeRunner())
+
+
+def test_records_usage_of_a_successful_call():
+    recorded = []
+    ask(FakeRunner((envelope({"ok": True}, usage=USAGE), 0, "")), recorder=recorded.append)
+    [u] = recorded
+    assert (u.purpose, u.model, u.attempt, u.outcome) == ("scoring", "claude-sonnet-test", 1, "ok")
+    assert (u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_creation_tokens) == (12, 340, 900, 1600)
+    assert (u.thinking_tokens, u.web_search_requests, u.cost_usd) == (80, 0, 0.0123)
+    assert (u.duration_ms, u.num_turns) == (1800, 2)
+    assert u.started_at
+
+
+def test_records_each_attempt_of_a_retry():
+    def check(data):
+        if not data.get("ok"):
+            raise ai.InvalidAnswer("nicht ok")
+    recorded = []
+    ask(FakeRunner((envelope({"ok": False}, usage=USAGE), 0, ""), (envelope({"ok": True}, usage=USAGE), 0, "")),
+        check, recorded.append)
+    assert [(u.attempt, u.outcome) for u in recorded] == [(1, "invalid"), (2, "ok")]
+    assert recorded[0].output_tokens == 340  # a rejected answer used quota too
+
+
+def test_records_a_quota_error_before_raising():
+    recorded = []
+    runner = FakeRunner((envelope(is_error=True, result="Claude usage limit reached.", usage=USAGE), 1, ""))
+    with pytest.raises(ai.AiError, match="Kontingent"):
+        ask(runner, recorder=recorded.append)
+    [u] = recorded
+    assert (u.outcome, u.cost_usd) == ("error", 0.0123)
+
+
+def test_records_output_without_envelope_as_error_without_usage():
+    recorded = []
+    with pytest.raises(ai.AiError):
+        ask(FakeRunner(("", 1, "something broke")), recorder=recorded.append)
+    [u] = recorded
+    assert (u.outcome, u.model, u.input_tokens, u.cost_usd) == ("error", "sonnet", None, None)
+
+
+def test_records_a_timeout_without_usage():
+    def runner(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+    recorded = []
+    with pytest.raises(ai.AiError, match="nicht geantwortet"):
+        ask(runner, recorder=recorded.append)
+    [u] = recorded
+    assert (u.outcome, u.output_tokens, u.duration_ms) == ("timeout", None, None)
+
+
+def test_a_failing_recorder_does_not_cost_the_answer():
+    def recorder(usage):
+        raise RuntimeError("database locked")
+    assert ask(FakeRunner((envelope({"ok": True}), 0, "")), recorder=recorder).data == {"ok": True}
+
+
+def test_unknown_purpose_is_refused():
+    with pytest.raises(ValueError, match="purpose"):
+        ask(FakeRunner(), purpose="scorring")

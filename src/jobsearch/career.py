@@ -522,8 +522,9 @@ def run_career_scan(conn: sqlite3.Connection, cfg: Config, companies: list[Targe
 
         for batch in _batches(changed):
             try:
-                answer = ask(build_prompt(batch), model=cfg.model_extraction, schema=SCHEMA, system=SYSTEM,
-                             check=check_answer(len(batch)))
+                answer = ask(build_prompt(batch), purpose="career_extract", model=cfg.model_extraction,
+                             schema=SCHEMA, system=SYSTEM, check=check_answer(len(batch)),
+                             usage_recorder=db.usage_recorder(conn, run_id))
             except ai.AiError as e:
                 log.error("Extraction failed: %s", e)
                 counts.error = str(e)

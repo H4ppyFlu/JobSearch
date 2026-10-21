@@ -2,7 +2,7 @@ import pytest
 
 from jobsearch import ai
 from jobsearch.search_terms import active_terms, check_answer, derived_terms, refresh_derived
-from tests.conftest import TERMS, TermsAi
+from tests.conftest import TERMS, TermsAi, ai_calls
 
 PROFILE = "Erfahrung in Planung und Anlagenbau, sucht Teilzeit in Musterstadt."
 
@@ -59,3 +59,8 @@ def test_active_terms_are_manual_then_derived_without_duplicates():
 def test_minus_line_switches_a_term_off():
     assert active_terms(["Projektleiter", "-anlagenplaner", "- Bauleiter"], ["Anlagenplaner", "Bauleiter", "Planer"]) \
         == ["Projektleiter", "Planer"]
+
+
+def test_ai_usage_is_recorded_without_a_run(conn):
+    refresh_derived(conn, PROFILE, model="sonnet", ask=TermsAi())
+    assert ai_calls(conn) == [("search_terms", None, "ok")]

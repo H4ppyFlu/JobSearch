@@ -233,8 +233,8 @@ def run_scoring(conn: sqlite3.Connection, cfg: Config, limit: int | None = None,
         profile = cfg.read_profile()
         prompt = build_prompt(profile, recent_notes(conn, cfg.feedback_notes_in_prompt), jobs)
         log.info("Scoring %d Jobs with %s, prompt %d chars", len(jobs), cfg.model_scoring, len(prompt))
-        answer = ask(prompt, model=cfg.model_scoring, schema=SCHEMA, system=SYSTEM_PROMPT,
-                     check=check_answer({j["id"] for j in jobs}))
+        answer = ask(prompt, purpose="scoring", model=cfg.model_scoring, schema=SCHEMA, system=SYSTEM_PROMPT,
+                     check=check_answer({j["id"] for j in jobs}), usage_recorder=db.usage_recorder(conn, run_id))
         store(conn, jobs, answer, profile_hash(profile), prompts.version("scoring.md"), counts)
     except (ai.AiError, ConfigError) as e:
         log.error("Scoring failed: %s", e)

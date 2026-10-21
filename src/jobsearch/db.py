@@ -6,11 +6,15 @@ in SQLite's user_version, so a migration runs exactly once per database.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
+
+from .ai import CallUsage
 
 
 def now() -> str:
@@ -61,3 +65,13 @@ def finish_run(conn: sqlite3.Connection, run_id: int, ok: bool, counts_json: str
             "UPDATE runs SET finished_at = ?, ok = ?, counts_json = ?, error = ? WHERE id = ?",
             (now(), int(ok), counts_json, error, run_id),
         )
+
+
+def usage_recorder(conn: sqlite3.Connection, run_id: int | None = None) -> Callable[[CallUsage], None]:
+    """Stores the AI usage of each claude -p call, committed at once so it survives a later crash."""
+    def record(usage: CallUsage) -> None:
+        row = {"run_id": run_id, **dataclasses.asdict(usage)}
+        with conn:
+            conn.execute(f"INSERT INTO ai_calls ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                         list(row.values()))
+    return record

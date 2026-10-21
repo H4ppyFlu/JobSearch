@@ -63,6 +63,17 @@ def add_job(conn, title, eligibility="eligible", reason=None, description="Aufga
     return job_id
 
 
+def record_usage(usage_recorder, purpose: str, model: str = "claude-test") -> None:
+    """What ai.ask reports for one successful attempt, for fakes that stand in for it."""
+    if usage_recorder:
+        usage_recorder(ai.CallUsage(purpose, model, 1, "ok", "2026-10-15T08:00:00", input_tokens=10,
+                                    output_tokens=20, cost_usd=0.01))
+
+
+def ai_calls(conn) -> list[tuple]:
+    return [tuple(r) for r in conn.execute("SELECT purpose, run_id, outcome FROM ai_calls ORDER BY id")]
+
+
 class FakeAi:
     """Stands in for ai.ask. Rates every Job in the prompt with the given values.
     `same`, `generic` and `suspected` (injection_suspected) are sets of job ids for which the answer is true."""
@@ -75,10 +86,12 @@ class FakeAi:
     def jobs_in(self, prompt):
         return json.loads(prompt.split("# Jobs\n\n", 1)[1])
 
-    def __call__(self, prompt, *, model, schema, system, check=None):
+    def __call__(self, prompt, *, purpose, model, schema, system, check=None, usage_recorder=None):
         self.prompts.append(prompt)
+        self.purpose = purpose
         if self.fail:
             raise ai.AiError(self.fail)
+        record_usage(usage_recorder, purpose)
         data = {"scores": [{"job_id": j["job_id"], "tier": self.tier, "reasoning": "Passt gut zu deinem Profil.",
                             "matching_skills": ["Projektplanung"], "missing_skills": ["SAP"],
                             "part_time": "unknown", "remote": self.remote,
@@ -100,10 +113,12 @@ class TermsAi:
         self.fail = fail
         self.prompts = []
 
-    def __call__(self, prompt, *, model, schema, system, check=None):
+    def __call__(self, prompt, *, purpose, model, schema, system, check=None, usage_recorder=None):
         self.prompts.append(prompt)
+        self.purpose = purpose
         if self.fail:
             raise ai.AiError(self.fail)
+        record_usage(usage_recorder, purpose)
         data = {"terms": self.answers[min(len(self.prompts), len(self.answers)) - 1]}
         check(data)
         return ai.Answer(data, "claude-test")

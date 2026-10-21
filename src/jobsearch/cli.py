@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import logging
 import shutil
@@ -268,7 +269,8 @@ def cmd_career_setup(cfg: Config, recheck: bool) -> int:
                     for r in conn.execute("SELECT * FROM career_pages WHERE fail_count > 0 OR empty_count > 0")}
         print(f"Prüfe {len(problems)} Karriereseiten neu, die fehlschlugen oder keine Stellen zeigten.")
     print("Suche Karriereseiten mit Websuche, das dauert ein paar Minuten ...")
-    result = run_setup(cfg.companies_path, model=cfg.model_scoring, recheck=problems)
+    ask = functools.partial(ai.ask, usage_recorder=db.usage_recorder(db.connect(cfg.db_path)))
+    result = run_setup(cfg.companies_path, model=cfg.model_scoring, ask=ask, recheck=problems)
     print(f"Karriereseiten eingetragen: {result.filled}")
     if result.not_found:
         print("Nicht gefunden: " + ", ".join(result.not_found))
@@ -285,9 +287,10 @@ def cmd_check_injection(cfg: Config) -> int:
     """Two AI calls with synthetic injected ads and a career page; prints pass or fail per expectation."""
     from . import injection
 
-    print("Injection-Check: 2 Aufrufe an Claude (Bewertung und Extraktion), nichts wird gespeichert.")
+    print("Injection-Check: 2 Aufrufe an Claude (Bewertung und Extraktion), gespeichert wird nur der KI-Verbrauch.")
     try:
-        report = injection.run(cfg, cfg.root / "tests" / "fixtures" / "injection")
+        ask = functools.partial(ai.ask, usage_recorder=db.usage_recorder(db.connect(cfg.db_path)))
+        report = injection.run(cfg, cfg.root / "tests" / "fixtures" / "injection", ask=ask)
     except ai.AiError as e:
         print(f"Injection-Check abgebrochen: {e}", file=sys.stderr)
         return 1

@@ -110,8 +110,8 @@ def run_setup(path: Path, *, model: str, ask=ai.ask, recheck: dict[str, str] | N
     for start in range(0, len(todo), BATCH_SIZE):
         batch = todo[start:start + BATCH_SIZE]
         try:
-            answer = ask(build_prompt(batch, recheck), model=model, schema=SCHEMA, system=SYSTEM,
-                         check=check_answer(len(batch)), tools=("WebSearch", "WebFetch"),
+            answer = ask(build_prompt(batch, recheck), purpose="career_setup", model=model, schema=SCHEMA,
+                         system=SYSTEM, check=check_answer(len(batch)), tools=("WebSearch", "WebFetch"),
                          timeout=TIMEOUT_SECONDS)
         except ai.AiError as e:
             log.error("Career setup failed: %s", e)

@@ -2,7 +2,7 @@
 
 `jobsearch check-injection` sends the scoring and the extraction prompt, built from the synthetic
 fixtures in tests/fixtures/injection/, to Claude once each (two calls from the quota) and checks the
-answers against fixed expectations. It never writes to the database. The expectation checks are pure
+answers against fixed expectations. It stores nothing but the AI usage of the two calls. The expectation checks are pure
 functions, so tests cover them with fake answers.
 """
 
@@ -86,8 +86,9 @@ def run(cfg: Config, fixtures: Path, ask=None) -> Report:
     report = Report()
     profile = (fixtures / "profile.md").read_text(encoding="utf-8")
     jobs = json.loads((fixtures / "jobs.json").read_text(encoding="utf-8"))
-    answer = ask(scoring.build_prompt(profile, [], jobs), model=cfg.model_scoring, schema=scoring.SCHEMA,
-                 system=scoring.SYSTEM_PROMPT, check=scoring.check_answer({j["id"] for j in jobs}))
+    answer = ask(scoring.build_prompt(profile, [], jobs), purpose="check_injection", model=cfg.model_scoring,
+                 schema=scoring.SCHEMA, system=scoring.SYSTEM_PROMPT,
+                 check=scoring.check_answer({j["id"] for j in jobs}))
     report.models.append(answer.model)
     report.checks += check_scoring(answer.data)
     for s in sorted(answer.data["scores"], key=lambda s: s["job_id"]):
@@ -97,7 +98,7 @@ def run(cfg: Config, fixtures: Path, ask=None) -> Report:
     company = TargetCompany(COMPANY, (normalize_company(COMPANY),), "Musterstadt", CAREER_URL, "other", "static")
     html = (fixtures / "career_page.html").read_text(encoding="utf-8")
     pages = [career.extraction_page(company, career.page_text(html, CAREER_URL))]
-    answer = ask(career.build_prompt(pages), model=cfg.model_extraction, schema=career.SCHEMA,
+    answer = ask(career.build_prompt(pages), purpose="check_injection", model=cfg.model_extraction, schema=career.SCHEMA,
                  system=career.SYSTEM, check=career.check_answer(1))
     report.models.append(answer.model)
     report.checks += check_extraction(answer.data)

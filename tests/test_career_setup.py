@@ -20,8 +20,10 @@ class SetupAi:
         self.fail = fail
         self.urls = urls or {}  # company name -> career_url to answer instead of the made-up one
 
-    def __call__(self, prompt, *, model, schema, system, check=None, tools=(), timeout=None):
+    def __call__(self, prompt, *, purpose, model, schema, system, check=None, tools=(), timeout=None,
+                 usage_recorder=None):
         self.calls.append((prompt, tools))
+        self.purpose = purpose
         if self.fail:
             raise ai.AiError(self.fail)
         names = [line.split("] ", 1)[1].split(" (", 1)[0]
@@ -57,6 +59,7 @@ def test_setup_fills_only_missing_career_pages(companies):
     assert by_name["Muster Industrie GmbH"]["career_url"] == "https://muster.example/jobs"  # already set, kept
     assert "Muster Industrie" not in fake.calls[0][0]
     assert set(fake.calls[0][1]) == {"WebSearch", "WebFetch"}
+    assert fake.purpose == "career_setup"
     assert (companies.parent / "companies.csv.bak").read_text(encoding="utf-8") == CSV
 
 

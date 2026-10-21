@@ -9,7 +9,7 @@ from jobsearch import ai, digest, notify, prompts
 from jobsearch.eligibility import HOMEOFFICE_REASON
 from jobsearch.scoring import AI_NOT_REMOTE_REASON, run_scoring
 
-from .conftest import FakeAi, add_job
+from .conftest import FakeAi, add_job, ai_calls
 
 TODAY = date.today().isoformat()
 
@@ -153,3 +153,10 @@ def test_the_digest_warns_once_when_scoring_flagged_something(conn, cfg, tmp_pat
     clean = run_scoring(conn, cfg, ask=FakeAi())
     assert "Anweisungen an die KI" not in digest.render(digest.DayReport(date.today(), {1: [], 2: [], 3: []}, [], 0),
                                                          clean)
+
+
+def test_ai_usage_is_recorded_with_the_score_run(conn, cfg):
+    add_job(conn, "Projektleiter")
+    run_scoring(conn, cfg, ask=FakeAi())
+    run_id = conn.execute("SELECT id FROM runs WHERE kind = 'score'").fetchone()[0]
+    assert ai_calls(conn) == [("scoring", run_id, "ok")]
