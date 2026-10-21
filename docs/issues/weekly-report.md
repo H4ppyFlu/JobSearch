@@ -1,6 +1,6 @@
 # Issue: Weekly report with recommendations
 
-Status: open. Implement on branch `implement-weekly-report`.
+Status: Part 1 done (2026-10-21). Implement on branch `implement-weekly-report`.
 
 ## Goal
 

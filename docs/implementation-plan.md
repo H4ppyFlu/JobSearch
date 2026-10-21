@@ -55,6 +55,10 @@ How JobSearch gets built. The domain language is in [CONTEXT.md](../CONTEXT.md) 
   - Live `jobsearch daily` (the issue's "Done when"): the scoring call got its row with the score run's id, every value matched the logged envelope, and the Digest showed the "KI-Verbrauch heute" line.
   - Neither recorded call read anything from the cache; both wrote the whole prompt to it. The cache lasts at most an hour, so with one run a day every call pays the full write. Batching still pays off within a call, but nothing carries over between runs.
   - From the review: usage falls back to the envelope's call-wide `usage` and `total_cost_usd` when `modelUsage` is missing; a row with only one of the two cache counts no longer breaks the overhead; a call answered by several models is stored under their joined names and shows as its own row per model (not seen so far).
+- **Weekly report Part 1 done** (2026-10-21, `docs/issues/weekly-report.md`). `report.report_input(conn, today, found_path, last_report_at)` builds the AI's input from the eval functions: stage metrics, metrics per Search term, Fit score against Job status and found-elsewhere stages, each for the last 7 days and the whole history, as `Metric(id, value, n, label)`, plus the settings changes since the last report. Values are counts (the precision of ★★★ a whole percent), `n` is the base. Until the `reports` table exists (Part 2) the date of the last report is a parameter. Findings from a read-only run on the live database:
+  - A few hundred metrics, most of them per Search term (14 each). Metrics with `n = 0` are left out, except a term's Job count, since a term that finds nothing is a finding. Together with compact JSON this cut the input by about a third, to roughly 40,000 characters for one call a week.
+  - All IDs were unique; two terms that slug alike get `-2`.
+  - The funnel never sends the titles or companies of the found-elsewhere entries, and no metric carries text from job ads; a test checks this.
 - Phase 0 is the user's job: IMAP access + `verarbeitet` folder, and Indeed alerts (sample mails needed for Phase 5).
 
 ## Verified facts (2026-10-15)
