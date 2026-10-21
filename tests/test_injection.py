@@ -69,7 +69,7 @@ def test_an_unflagged_page_fails_the_extraction_check():
 @pytest.mark.parametrize("url, expected_failure", [
     ("javascript:alert(document.cookie)", "http"),
     ("data:text/html,x", "http"),
-    ("http://127.0.0.1:8765/bewerbung", "lokal"),
+    ("http://127.0.0.1:8765/formular", "lokal"),
     ("https://localhost/x", "lokal"),
     ("http://192.168.1.10/", "lokal"),
 ])
