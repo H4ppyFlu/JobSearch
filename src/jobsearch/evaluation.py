@@ -163,6 +163,10 @@ def changes_report(conn: sqlite3.Connection) -> list[str]:
 
 # --- Stage metrics -------------------------------------------------------------------------------
 
+# A rescored Job has several Fit scores; the metrics count it once, by its newest.
+NEWEST_ID = "(SELECT max(id) FROM fit_scores WHERE job_id = j.id)"
+NEWEST_SCORE = f"LEFT JOIN fit_scores s ON s.id = {NEWEST_ID}"
+
 @dataclass
 class StageMetrics:
     daily_runs: int = 0
@@ -173,6 +177,7 @@ class StageMetrics:
     generic: int = 0
     tiers: Counter = field(default_factory=Counter)
     low_confidence: int = 0
+    sorted_out: int = 0  # ★ Jobs the AI sorted out
     unscored: int = 0  # eligible, not scored yet
 
     @property
@@ -200,8 +205,8 @@ def stage_metrics(conn: sqlite3.Connection, period: Period) -> StageMetrics:
                                    params).fetchall())
     cond, params = period.where("j.first_seen")
     rows = conn.execute(
-        f"""SELECT j.eligibility, j.ineligible_reason, j.is_generic, s.tier, s.low_confidence
-            FROM jobs j LEFT JOIN fit_scores s ON s.job_id = j.id WHERE {cond}""", params).fetchall()
+        f"""SELECT j.eligibility, j.ineligible_reason, j.is_generic, s.tier, s.low_confidence, s.sorted_out
+            FROM jobs j {NEWEST_SCORE} WHERE {cond}""", params).fetchall()
     for r in rows:
         m.jobs += 1
         m.eligibility[r["eligibility"]] += 1
@@ -211,6 +216,7 @@ def stage_metrics(conn: sqlite3.Connection, period: Period) -> StageMetrics:
         if r["tier"] is not None:
             m.tiers[r["tier"]] += 1
             m.low_confidence += r["low_confidence"]
+            m.sorted_out += r["sorted_out"]
         elif r["eligibility"] == "eligible":
             m.unscored += 1
     return m
@@ -233,7 +239,7 @@ def term_metrics(conn: sqlite3.Connection, period: Period) -> list[TermMetrics]:
     rows = conn.execute(
         f"""SELECT DISTINCT pt.term, j.id, j.eligibility, j.status, s.tier
             FROM posting_terms pt JOIN postings p ON p.id = pt.posting_id JOIN jobs j ON j.id = p.job_id
-            LEFT JOIN fit_scores s ON s.job_id = j.id WHERE {cond}""", params).fetchall()
+            {NEWEST_SCORE} WHERE {cond}""", params).fetchall()
     terms_per_job = Counter(r["id"] for r in rows)
     stats: dict[str, TermMetrics] = {}
     for _, snap in snapshots(conn, period):
@@ -282,6 +288,7 @@ def stage_report(conn: sqlite3.Connection, chosen: list[Period]) -> list[str]:
                  for kind in kinds]
     rows.append(row("Bewertet", lambda m: str(m.scored)))
     rows += [row(f"  {STARS[tier]}", lambda m, t=tier: _share(m.tiers[t], m.scored)) for tier in (3, 2, 1)]
+    rows.append(row("    davon aussortiert", lambda m: _share(m.sorted_out, m.tiers[1])))
     rows.append(row("  geringe Sicherheit", lambda m: _share(m.low_confidence, m.scored)))
     rows.append(row("  Sammelanzeigen", lambda m: _share(m.generic, m.scored)))
     rows.append(row("Eligible, noch unbewertet", lambda m: str(m.unscored)))
@@ -325,11 +332,14 @@ def _group(row: sqlite3.Row, by: str | None) -> str:
 
 
 def score_tables(conn: sqlite3.Connection, period: Period, by: str | None = None) -> dict[str, Counter]:
-    """Per group, a count per (tier, label) for the scored Jobs first seen in the period."""
+    """Per group, a count per (tier, label) for the scored Jobs first seen in the period. Without `by`
+    each Job counts once, by its newest Fit score. With `by` every Fit score counts in its group, so
+    grouping by prompt compares the old and the new judgment of a rescored Job."""
     cond, params = period.where("j.first_seen")
+    scores = "fit_scores s JOIN jobs j ON j.id = s.job_id" if by else f"jobs j JOIN fit_scores s ON s.id = {NEWEST_ID}"
     rows = conn.execute(
         f"""SELECT s.tier, j.status, s.model, s.profile_hash, s.prompt_hash, s.scored_at
-            FROM fit_scores s JOIN jobs j ON j.id = s.job_id WHERE {cond} ORDER BY s.scored_at""", params)
+            FROM {scores} WHERE {cond} ORDER BY s.scored_at""", params)
     tables: dict[str, Counter] = {}
     for r in rows:
         tables.setdefault(_group(r, by), Counter())[(r["tier"], label(r["status"]))] += 1
@@ -387,6 +397,7 @@ STAGES = {
     "not_collected": ("nicht gesammelt, Firma bekannt", "Suchbegriffe"),
     "ineligible": ("ineligible", "Radius, Ausschlussliste, Remote-Erkennung"),
     "waiting": ("unclear oder unbewertet", "Rückstau, fehlende Beschreibung"),
+    "sorted_out": ("aussortiert", "Prompt, Profil, Feedback notes"),
     "tier1": ("★", "Prompt, Profil, Feedback notes"),
     "tier2": ("★★", ""),
     "tier3": ("★★★", ""),
@@ -409,8 +420,9 @@ def read_found(path: Path) -> list[Found]:
             for r in rows if r.get("title") or r.get("url")]
 
 
-_POSTINGS = """SELECT p.company, p.title AS posting_title, j.eligibility, j.ineligible_reason, j.status, s.tier
-               FROM postings p JOIN jobs j ON j.id = p.job_id LEFT JOIN fit_scores s ON s.job_id = j.id"""
+_POSTINGS = f"""SELECT p.company, p.title AS posting_title, j.eligibility, j.ineligible_reason, j.status, s.tier,
+                       s.sorted_out
+                FROM postings p JOIN jobs j ON j.id = p.job_id {NEWEST_SCORE}"""
 
 
 def _same_company(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
@@ -448,6 +460,8 @@ def trace(conn: sqlite3.Connection, found: Found, collecting_since: str | None) 
     if row["eligibility"] == "ineligible":
         stage = "ineligible"
         details.insert(0, reason_kind(row["ineligible_reason"]))
+    elif row["sorted_out"]:
+        stage = "sorted_out"
     elif row["tier"] is not None:
         stage = f"tier{row['tier']}"
     else:

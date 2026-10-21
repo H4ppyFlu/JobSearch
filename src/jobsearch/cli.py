@@ -80,7 +80,8 @@ def cmd_status(cfg: Config) -> None:
            WHERE p.description IS NULL AND j.eligibility != 'ineligible'"""
     ).fetchone()[0]
     print(f"Postings: {total} (ohne Beschreibung, aber in Reichweite: {missing})")
-    tiers = dict(conn.execute("SELECT tier, count(*) FROM fit_scores GROUP BY tier").fetchall())
+    tiers = dict(conn.execute(f"SELECT s.tier, count(*) FROM jobs j JOIN fit_scores s ON s.id = {evaluation.NEWEST_ID} "
+                              "GROUP BY s.tier").fetchall())
     print(f"Fit scores: ★★★ {tiers.get(3, 0)}, ★★ {tiers.get(2, 0)}, ★ {tiers.get(1, 0)}; "
           f"warten auf Bewertung: {backlog(conn)}")
     derived = derived_terms(conn)

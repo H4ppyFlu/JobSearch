@@ -487,3 +487,14 @@ def test_migration_008_adds_the_report_tables_to_an_existing_database(tmp_path):
     conn = db.connect(path)
     assert conn.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
     assert last_period_end(conn) is None and latest_report(conn) is None
+
+
+def test_the_sorted_out_share_is_a_stage_metric(conn, tmp_path):
+    for title, sorted_out in (("Koch", 1), ("Planer", 0)):
+        job = add_job(conn, title, first_seen=TODAY.isoformat())
+        with conn:
+            conn.execute("""INSERT INTO fit_scores (job_id, tier, reasoning, sorted_out, profile_hash, model, scored_at)
+                            VALUES (?, 1, 'Passt.', ?, 'ppp', 'claude-test', ?)""",
+                         (job, sorted_out, f"{TODAY.isoformat()}T09:00:00"))
+    m = by_id(report_input(conn, TODAY, tmp_path / "found.csv", None, []))
+    assert (m["stage.sorted_out.7d"].value, m["stage.sorted_out.7d"].n) == (1, 2)

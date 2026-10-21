@@ -9,7 +9,7 @@ from jobsearch.career import ScanCounts
 from jobsearch import ai, db, usage
 from jobsearch.cli import career_summary, cmd_daily, cmd_status
 from jobsearch.config import ConfigError
-from tests.conftest import TERMS, TermsAi
+from tests.conftest import TERMS, TermsAi, add_job
 
 EXAMPLES = Path(__file__).parent.parent / "private.example"
 
@@ -139,3 +139,14 @@ def test_any_weekly_report_error_leaves_the_run_alone(cfg, toasts, capsys, monke
     monkeypatch.setattr("jobsearch.report.make_report", broken)
     assert cmd_daily(cfg, score=True, career="off", client=RecordingClient(), ask=DailyAi()) == 0
     assert "Wochenbericht fehlgeschlagen" in capsys.readouterr().err
+
+
+def test_status_counts_each_job_once_by_its_newest_score(cfg, capsys):
+    conn = db.connect(cfg.db_path)
+    job = add_job(conn, "Planer")
+    with conn:
+        for tier in (3, 1):
+            conn.execute("""INSERT INTO fit_scores (job_id, tier, reasoning, profile_hash, model, scored_at)
+                            VALUES (?, ?, 'Passt.', 'ppp', 'claude-test', '2026-10-16T09:00:00')""", (job, tier))
+    cmd_status(cfg)
+    assert "Fit scores: ★★★ 0, ★★ 0, ★ 1;" in capsys.readouterr().out

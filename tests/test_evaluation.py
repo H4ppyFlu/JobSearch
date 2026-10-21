@@ -10,7 +10,7 @@ from jobsearch import db, usage
 from jobsearch.cli import cmd_eval
 from jobsearch.eligibility import NOT_FULLY_REMOTE_REASON
 from jobsearch.config import ConfigError
-from jobsearch.evaluation import (Found, Period, changes, changes_report, describe, funnel_report, label, periods,
+from jobsearch.evaluation import (STAGES, Found, Period, changes, changes_report, describe, funnel_report, label, periods,
                                   read_found, reason_kind, score_report, score_tables, stage_metrics, stage_report, term_metrics,
                                   trace, usage_metrics, usage_report)
 from jobsearch.scoring import AI_NOT_REMOTE_REASON
@@ -411,3 +411,41 @@ def test_migration_007_adds_ai_calls_to_an_existing_database(tmp_path):
     add_call(conn, "2026-10-15T08:00:00", run_id=1)
     assert conn.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
     assert conn.execute("SELECT run_id FROM ai_calls").fetchone()[0] == 1
+
+
+def rescored_job(conn, title="Koch", status="new", first_seen="2026-10-15"):
+    """A Job scored ★★★ under an old prompt and later rescored to a Sorted out ★."""
+    job = scored_job(conn, title, 3, status, prompt_hash="aaaaaaaa00000000", first_seen=first_seen)
+    with conn:
+        conn.execute("""INSERT INTO fit_scores (job_id, tier, reasoning, sorted_out, profile_hash, prompt_hash, model,
+                                                scored_at)
+                        VALUES (?, 1, 'Anderes Feld.', 1, 'ppp', 'bbbbbbbb00000000', 'claude-test',
+                                '2026-10-20T09:00:00')""", (job,))
+    return job
+
+
+def test_a_rescored_job_counts_once_with_its_newest_score(conn):
+    job = rescored_job(conn)
+    found_by(conn, job, "Planer")
+    m = stage_metrics(conn, Period("gesamt"))
+    assert (m.scored, m.tiers[1], m.tiers[3], m.sorted_out) == (1, 1, 0, 1)
+    [t] = term_metrics(conn, Period("gesamt"))
+    assert (t.jobs, t.only_here, dict(t.tiers)) == (1, 1, {1: 1})
+    assert score_tables(conn, Period("gesamt")) == {"alle": Counter({(1, None): 1})}
+    by_prompt = score_tables(conn, Period("gesamt"), "prompt")
+    assert by_prompt == {"Prompt aaaaaaaa": Counter({(3, None): 1}), "Prompt bbbbbbbb": Counter({(1, None): 1})}
+
+
+def test_the_stage_report_shows_the_sorted_out_share_of_tier_1(conn):
+    rescored_job(conn)
+    scored_job(conn, "Sachbearbeiter", 1)
+    assert any(line.split() == ["davon", "aussortiert", "1", "(50", "%)"] for line in stage_report(conn, [Period("gesamt")]))
+
+
+def test_a_found_elsewhere_opening_that_was_sorted_out_names_that_stage(conn, tmp_path):
+    job = rescored_job(conn, "Planer (m/w/d)")
+    url = conn.execute("SELECT url FROM postings WHERE job_id = ?", (job,)).fetchone()[0]
+    assert trace(conn, Found("Muster GmbH", "Planer", url), None).stage == "sorted_out"
+    report = funnel_report(conn, write_found(tmp_path / "found.csv", ("Muster GmbH", "Planer", url, "")))
+    assert any("aussortiert" in line and "1  → Prompt, Profil, Feedback notes" in line for line in report)
+    assert len(report) == 1 + len(STAGES) + 3

@@ -12,7 +12,7 @@ Each metric has an `id`, a `value`, `n` (the count the value rests on, e.g. all 
 
 Groups:
 
-- `stage.*`: new Postings per Source, new Jobs, eligible / unclear / ineligible Jobs and why they were ineligible, Generic jobs (multi-role and staffing agency ads), tiers, low-confidence scores, Jobs still waiting for a score.
+- `stage.*`: new Postings per Source, new Jobs, eligible / unclear / ineligible Jobs and why they were ineligible, Generic jobs (multi-role and staffing agency ads), tiers, ★ Jobs the AI sorted out as clearly outside the candidate's field (`sorted_out`), low-confidence scores, Jobs still waiting for a score.
 - `term.<term>.*`: per active Search term, the Jobs it found, those no other term found (`only_here`), eligible ones, tiers and positive labels. The labels name the real term.
 - `score.*`: tiers against labels, the precision of tier 3, positive Jobs the AI put in tier 1 (`missed_in_tier1`, the costliest misses), and how many scored Jobs have a label.
 - `funnel.*`: openings the candidate found outside the tool, by the stage where the pipeline lost them.
