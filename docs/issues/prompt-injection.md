@@ -1,6 +1,6 @@
 # Issue: Defenses against prompt injection from third-party text
 
-Status: Parts 1 to 4 done on branch `implement-prompt-injection`; personal-data check and merge into `main` pending.
+Status: done (2026-10-21), merged into `main`.
 
 ## Goal
 
